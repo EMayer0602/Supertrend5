@@ -453,7 +453,7 @@ def main():
 	print("Candlestick Chart Data:")
 	print(btc_data[['Open', 'High', 'Low', 'Close']].dropna().head())
 	import plotly.io as pio
-	pio.re7nderers.default = 'browser'  # oder 'browser'
+	pio.renderers.default = 'browser'  # oder 'browser'
 
 if __name__ == "__main__":
 	main()
