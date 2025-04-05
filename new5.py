@@ -226,29 +226,15 @@ class TradingSystem:
 			"Sharpe Ratio": sharpe_ratio
 		}
 	def plot_results(self, df, long_trades, short_trades, long_equity, short_equity):
-		"""
-		Plots the trading results including price chart, trades, and equity curves.
-	
-		Parameters:
-		df (DataFrame): DataFrame containing stock data.
-		long_trades (list): List of long trades.
-		short_trades (list): List of short trades.
-		long_equity (Series): Equity curve for long trades.
-		short_equity (Series): Equity curve for short trades.
-	
-		Returns:
-		Figure: Plotly figure with trading results.
-		"""
 		# Start plotting from index 15
-		plot_df = df.iloc[15:].copy()  # Adjusting the DataFrame
-		plot_long_equity = long_equity.iloc[15:].copy()
-		plot_short_equity = short_equity.iloc[15:].copy()
-		print("plot_df")
-		print(plot_df)
+		plot_df = df.iloc[15:]  # Adjusting the DataFrame
+		plot_long_equity = long_equity.iloc[15:]
+		plot_short_equity = short_equity.iloc[15:]
+	
+		# Debugging: Print the DataFrame to ensure data is available
+		print("Plot DataFrame (after index 15):")
 		print(plot_df[['Open', 'High', 'Low', 'Close']].dropna().head())
-		print("Plot DF Index:")
-		print(plot_df.index)
-
+	
 		# Create subplots with 2 rows
 		fig = make_subplots(
 			rows=2, cols=1,
@@ -258,6 +244,9 @@ class TradingSystem:
 			row_heights=[0.6, 0.4]
 		)
 	
+		# Update candlestick chart range
+		fig.update_yaxes(autorange=True, row=1, col=1)
+	
 		# Add candlestick chart
 		fig.add_trace(
 			go.Candlestick(
@@ -266,7 +255,7 @@ class TradingSystem:
 				high=plot_df['High'],
 				low=plot_df['Low'],
 				close=plot_df['Close'],
-				name=stock_symbol
+				name='Candlestick'
 			),
 			row=1, col=1
 		)
@@ -353,10 +342,10 @@ class TradingSystem:
 	
 		# Update y-axes ranges
 		fig.update_yaxes(title_text="Price", row=1, col=1)
-		fig.update_yaxes(title_text="Equity", row=2, col=1)
-		fig.update_yaxes(autorange=True, row=1, col=1)	
+		fig.update_yaxes(autorange=True, row=2, col=1)
+	
 		return fig
-		
+	# Create subplots with 2 rows		
 	def _add_indicator(self, fig, df, signal_column, name, color, row, col):
 		fig.add_trace(
 			go.Scatter(
