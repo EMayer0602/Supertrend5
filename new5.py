@@ -267,6 +267,11 @@ class TradingSystem:
 			long_exits = [trade['Exit Date'] for trade in long_trades if trade['Exit Date'] >= plot_df.index[0]]
 			long_exit_prices = [trade['Exit Price'] for trade in long_trades if trade['Exit Date'] >= plot_df.index[0]]
 	
+			print("Long Trade Entries:", long_entries)
+			print("Long Trade Entry Prices:", long_entry_prices)
+			print("Long Trade Exits:", long_exits)
+			print("Long Trade Exit Prices:", long_exit_prices)
+	
 			fig.add_trace(
 				go.Scatter(
 					x=long_entries,
@@ -295,6 +300,11 @@ class TradingSystem:
 			short_entry_prices = [trade['Entry Price'] for trade in short_trades if trade['Entry Date'] >= plot_df.index[0]]
 			short_exits = [trade['Exit Date'] for trade in short_trades if trade['Exit Date'] >= plot_df.index[0]]
 			short_exit_prices = [trade['Exit Price'] for trade in short_trades if trade['Exit Date'] >= plot_df.index[0]]
+	
+			print("Short Trade Entries:", short_entries)
+			print("Short Trade Entry Prices:", short_entry_prices)
+			print("Short Trade Exits:", short_exits)
+			print("Short Trade Exit Prices:", short_exit_prices)
 	
 			fig.add_trace(
 				go.Scatter(
@@ -443,7 +453,7 @@ def main():
 	print("Candlestick Chart Data:")
 	print(btc_data[['Open', 'High', 'Low', 'Close']].dropna().head())
 	import plotly.io as pio
-	pio.renderers.default = 'browser'  # oder 'browser'
+	pio.re7nderers.default = 'browser'  # oder 'browser'
 
 if __name__ == "__main__":
 	main()
