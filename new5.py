@@ -1,4 +1,4 @@
-        #Import necessary libraries
+                #Import necessary libraries
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -225,16 +225,17 @@ class TradingSystem:
 			"Max Drawdown": max_drawdown,
 			"Sharpe Ratio": sharpe_ratio
 		}
+
 	def plot_results(self, df, long_trades, short_trades, long_equity, short_equity):
 		# Start plotting from index 15
 		plot_df = df.iloc[15:]  # Adjusting the DataFrame
 		plot_long_equity = long_equity.iloc[15:]
 		plot_short_equity = short_equity.iloc[15:]
-	
+
 		# Debugging: Print the DataFrame to ensure data is available
 		print("Plot DataFrame (after index 15):")
 		print(plot_df[['Open', 'High', 'Low', 'Close']].dropna().head())
-	
+
 		# Create subplots with 2 rows
 		fig = make_subplots(
 			rows=2, cols=1,
@@ -243,10 +244,7 @@ class TradingSystem:
 			subplot_titles=('Price and Trades', 'Equity Curves'),
 			row_heights=[0.6, 0.4]
 		)
-	
-		# Update candlestick chart range
-		fig.update_yaxes(autorange=True, row=1, col=1)
-	
+
 		# Add candlestick chart
 		fig.add_trace(
 			go.Candlestick(
@@ -259,7 +257,7 @@ class TradingSystem:
 			),
 			row=1, col=1
 		)
-	
+
 		# Add long trade entry and exit points with an offset
 		offset = 0.5  # Adjust this value as needed
 		if long_trades:
@@ -267,7 +265,7 @@ class TradingSystem:
 			long_entry_prices = [trade['Entry Price'] for trade in long_trades if trade['Entry Date'] >= plot_df.index[0]]
 			long_exits = [trade['Exit Date'] for trade in long_trades if trade['Exit Date'] >= plot_df.index[0]]
 			long_exit_prices = [trade['Exit Price'] for trade in long_trades if trade['Exit Date'] >= plot_df.index[0]]
-	
+
 			fig.add_trace(
 				go.Scatter(
 					x=long_entries,
@@ -278,7 +276,7 @@ class TradingSystem:
 				),
 				row=1, col=1
 			)
-	
+
 			fig.add_trace(
 				go.Scatter(
 					x=long_exits,
@@ -289,14 +287,14 @@ class TradingSystem:
 				),
 				row=1, col=1
 			)
-	
+
 		# Add short trade entry and exit points with an offset
 		if short_trades:
 			short_entries = [trade['Entry Date'] for trade in short_trades if trade['Entry Date'] >= plot_df.index[0]]
 			short_entry_prices = [trade['Entry Price'] for trade in short_trades if trade['Entry Date'] >= plot_df.index[0]]
 			short_exits = [trade['Exit Date'] for trade in short_trades if trade['Exit Date'] >= plot_df.index[0]]
 			short_exit_prices = [trade['Exit Price'] for trade in short_trades if trade['Exit Date'] >= plot_df.index[0]]
-	
+
 			fig.add_trace(
 				go.Scatter(
 					x=short_entries,
@@ -307,7 +305,7 @@ class TradingSystem:
 				),
 				row=1, col=1
 			)
-	
+
 			fig.add_trace(
 				go.Scatter(
 					x=short_exits,
@@ -318,18 +316,18 @@ class TradingSystem:
 				),
 				row=1, col=1
 			)
-	
+
 		# Add equity curves
 		if len(plot_long_equity) > 0:
 			self._add_equity_curve(fig, plot_long_equity, 'Long Equity', 'green', 2, 1)
 		if len(plot_short_equity) > 0:
 			self._add_equity_curve(fig, plot_short_equity, 'Short Equity', 'red', 2, 1)
-	
+
 		# Add combined equity curve
 		combined_equity = plot_long_equity + plot_short_equity - self.initial_capital
 		combined_equity = combined_equity.ffill().bfill()
 		self._add_equity_curve(fig, combined_equity, 'Combined Equity', 'blue', 2, 1)
-	
+
 		# Update layout
 		fig.update_layout(
 			title='Trading System Results',
@@ -340,16 +338,17 @@ class TradingSystem:
 			showlegend=True,
 			legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
 		)
-	
+
 		# Explicitly set y-axes ranges based on data
 		price_min = plot_df['Low'].min()
 		price_max = plot_df['High'].max()
 		fig.update_yaxes(range=[price_min * 0.95, price_max * 1.05], row=1, col=1)
 		fig.update_yaxes(autorange=True, row=2, col=1)
-	
+
 		fig.show()
-	
-		return fig
+
+		return figfig
+
 	# Create subplots with 2 rows		
 	def _add_indicator(self, fig, df, signal_column, name, color, row, col):
 		fig.add_trace(
