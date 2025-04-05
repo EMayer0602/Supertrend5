@@ -1,4 +1,4 @@
-#Import necessary libraries
+        #Import necessary libraries
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -260,22 +260,18 @@ class TradingSystem:
 			row=1, col=1
 		)
 	
-		# Add long trade entry and exit points
+		# Add long trade entry and exit points with an offset
+		offset = 0.5  # Adjust this value as needed
 		if long_trades:
 			long_entries = [trade['Entry Date'] for trade in long_trades if trade['Entry Date'] >= plot_df.index[0]]
 			long_entry_prices = [trade['Entry Price'] for trade in long_trades if trade['Entry Date'] >= plot_df.index[0]]
 			long_exits = [trade['Exit Date'] for trade in long_trades if trade['Exit Date'] >= plot_df.index[0]]
 			long_exit_prices = [trade['Exit Price'] for trade in long_trades if trade['Exit Date'] >= plot_df.index[0]]
 	
-			print("Long Trade Entries:", long_entries)
-			print("Long Trade Entry Prices:", long_entry_prices)
-			print("Long Trade Exits:", long_exits)
-			print("Long Trade Exit Prices:", long_exit_prices)
-	
 			fig.add_trace(
 				go.Scatter(
 					x=long_entries,
-					y=long_entry_prices,
+					y=[price['AAPL'] + offset for price in long_entry_prices],
 					mode='markers',
 					name='Long Entry',
 					marker=dict(symbol='triangle-up', size=10, color='green')
@@ -286,7 +282,7 @@ class TradingSystem:
 			fig.add_trace(
 				go.Scatter(
 					x=long_exits,
-					y=long_exit_prices,
+					y=[price['AAPL'] + offset for price in long_exit_prices],
 					mode='markers',
 					name='Long Exit',
 					marker=dict(symbol='triangle-down', size=10, color='red')
@@ -294,22 +290,17 @@ class TradingSystem:
 				row=1, col=1
 			)
 	
-		# Add short trade entry and exit points
+		# Add short trade entry and exit points with an offset
 		if short_trades:
 			short_entries = [trade['Entry Date'] for trade in short_trades if trade['Entry Date'] >= plot_df.index[0]]
 			short_entry_prices = [trade['Entry Price'] for trade in short_trades if trade['Entry Date'] >= plot_df.index[0]]
 			short_exits = [trade['Exit Date'] for trade in short_trades if trade['Exit Date'] >= plot_df.index[0]]
 			short_exit_prices = [trade['Exit Price'] for trade in short_trades if trade['Exit Date'] >= plot_df.index[0]]
 	
-			print("Short Trade Entries:", short_entries)
-			print("Short Trade Entry Prices:", short_entry_prices)
-			print("Short Trade Exits:", short_exits)
-			print("Short Trade Exit Prices:", short_exit_prices)
-	
 			fig.add_trace(
 				go.Scatter(
 					x=short_entries,
-					y=short_entry_prices,
+					y=[price['AAPL'] - offset for price in short_entry_prices],
 					mode='markers',
 					name='Short Entry',
 					marker=dict(symbol='triangle-down', size=10, color='blue')
@@ -320,7 +311,7 @@ class TradingSystem:
 			fig.add_trace(
 				go.Scatter(
 					x=short_exits,
-					y=short_exit_prices,
+					y=[price['AAPL'] - offset for price in short_exit_prices],
 					mode='markers',
 					name='Short Exit',
 					marker=dict(symbol='triangle-up', size=10, color='black')
@@ -350,9 +341,13 @@ class TradingSystem:
 			legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
 		)
 	
-		# Update y-axes ranges
-		fig.update_yaxes(title_text="Price", row=1, col=1)
+		# Explicitly set y-axes ranges based on data
+		price_min = plot_df['Low'].min()
+		price_max = plot_df['High'].max()
+		fig.update_yaxes(range=[price_min * 0.95, price_max * 1.05], row=1, col=1)
 		fig.update_yaxes(autorange=True, row=2, col=1)
+	
+		fig.show()
 	
 		return fig
 	# Create subplots with 2 rows		
@@ -429,6 +424,7 @@ def main():
 	long_stats = system.calculate_trade_statistics(long_trades, long_equity)
 	short_stats = system.calculate_trade_statistics(short_trades, short_equity)
 	
+		
 	# Print statistics
 	system.print_statistics(long_stats, "Long")
 	system.print_statistics(short_stats, "Short")
