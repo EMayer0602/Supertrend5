@@ -7,11 +7,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 def flatten_dataframe(df):
-    flattened_df = df.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        flattened_df.columns = ['_'.join(col).strip() for col in df.columns.values]
-    print(f"NaN values in flattened DataFrame: {flattened_df.isna().sum().sum()}")
-    return flattened_df
+	flattened_df = df.copy()
+	if isinstance(df.columns, pd.MultiIndex):
+		flattened_df.columns = ['_'.join(col).strip() for col in df.columns.values]
+	print(f"NaN values in flattened DataFrame: {flattened_df.isna().sum().sum()}")
+	return flattened_df
 # Function to calculate technical indicators and trend signals
 def calculate_indicators_and_trends(df, period=14):
 	df = df.copy()
@@ -252,7 +252,8 @@ class TradingSystem:
 		self._add_equity_curve(fig, combined_equity, 'Combined Equity', 'blue', 2, 1)
 		fig.update_layout(
 			title='Trading System Results',
-			xaxis_title='Date',
+			xaxis=dict(rangeslider=dict(visible=False)),  # Make the rangeslider for chart1 invisible
+			xaxis2=dict(rangeslider=dict(visible=True, thickness=0.05)),  # Ensure the rangeslider for chart2 is visible and as small as possible
 			yaxis_title='Price',
 			yaxis2_title='Equity',
 			height=1000,
@@ -264,10 +265,8 @@ class TradingSystem:
 		equity_min = min(plot_long_equity.min(), plot_short_equity.min(), combined_equity.min())
 		equity_max = max(plot_long_equity.max(), plot_short_equity.max(), combined_equity.max())
 		fig.update_yaxes(range=[price_min * 0.95, price_max * 1.05], row=1, col=1)
-		fig.update_yaxes(range=[equity_min * 1.05, equity_max * 1.05], row=2, col=1)
-		fig.show()
+		fig.update_yaxes(range=[equity_min * 1.1 if equity_min < 0 else equity_min * 0.9, equity_max * 1.1], row=2, col=1)  # Adjusted to cover negative values
 		return fig
-
 	def _add_indicator(self, fig, df, signal_column, name, color, row, col):
 		fig.add_trace(
 			go.Scatter(
