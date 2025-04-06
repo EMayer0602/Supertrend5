@@ -14,42 +14,70 @@ def flatten_dataframe(df):
     return flattened_df
 
 # Function to calculate the Supertrend indicator
-def calculate_supertrend(df, symbol, atr_period=10, multiplier=3):
-    df = df.copy()
-    high_col = f'High_{symbol}'
-    low_col = f'Low_{symbol}'
-    close_col = f'Close_{symbol}'
-
-    df['TR'] = df[[high_col, low_col, close_col]].apply(lambda x: max(x[high_col] - x[low_col], abs(x[high_col] - x[close_col]), abs(x[low_col] - x[close_col])), axis=1)
-    df['ATR'] = df['TR'].rolling(window=atr_period, min_periods=1).mean()
-    df['Upper Basic'] = ((df[high_col] + df[low_col]) / 2) + (multiplier * df['ATR'])
-    df['Lower Basic'] = ((df[high_col] + df[low_col]) / 2) - (multiplier * df['ATR'])
-
-    df['Upper Band'] = df['Upper Basic']
-    df['Lower Band'] = df['Lower Basic']
-
-    for i in range(1, len(df)):
-        if df[close_col].iloc[i-1] > df['Upper Band'].iloc[i-1]:
-            df['Upper Band'].iloc[i] = min(df['Upper Basic'].iloc[i], df['Upper Band'].iloc[i-1])
+def get_supertrend(high, low, close, period, multiplier):
+    # Calculate ATR
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    
+    # Calculate basic upper and lower bands
+    basic_upper = (high + low) / 2 + (multiplier * atr)
+    basic_lower = (high + low) / 2 - (multiplier * atr)
+    
+    # Initialize Supertrend columns
+    final_upper = pd.Series(0.0, index=close.index)
+    final_lower = pd.Series(0.0, index=close.index)
+    supertrend = pd.Series(0.0, index=close.index)
+    
+    # Calculate final upper and lower bands
+    for i in range(period, len(close)):
+        if basic_upper.iloc[i] < final_upper.iloc[i-1] or close.iloc[i-1] > final_upper.iloc[i-1]:
+            final_upper.iloc[i] = basic_upper.iloc[i]
         else:
-            df['Upper Band'].iloc[i] = df['Upper Basic'].iloc[i]
-
-        if df[close_col].iloc[i-1] < df['Lower Band'].iloc[i-1]:
-            df['Lower Band'].iloc[i] = max(df['Lower Basic'].iloc[i], df['Lower Band'].iloc[i-1])
+            final_upper.iloc[i] = final_upper.iloc[i-1]
+            
+        if basic_lower.iloc[i] > final_lower.iloc[i-1] or close.iloc[i-1] < final_lower.iloc[i-1]:
+            final_lower.iloc[i] = basic_lower.iloc[i]
         else:
-            df['Lower Band'].iloc[i] = df['Lower Basic'].iloc[i]
-
-    df['Supertrend'] = df['Upper Band']
-    for i in range(1, len(df)):
-        if df[close_col].iloc[i] > df['Upper Band'].iloc[i-1]:
-            df['Supertrend'].iloc[i] = df['Lower Band'].iloc[i]
-        elif df[close_col].iloc[i] < df['Lower Band'].iloc[i-1]:
-            df['Supertrend'].iloc[i] = df['Upper Band'].iloc[i]
+            final_lower.iloc[i] = final_lower.iloc[i-1]
+    
+    # Calculate Supertrend
+    for i in range(period, len(close)):
+        if supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] <= final_upper.iloc[i]:
+            supertrend.iloc[i] = final_upper.iloc[i]
+        elif supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] > final_upper.iloc[i]:
+            supertrend.iloc[i] = final_lower.iloc[i]
+        elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] >= final_lower.iloc[i]:
+            supertrend.iloc[i] = final_lower.iloc[i]
+        elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] < final_lower.iloc[i]:
+            supertrend.iloc[i] = final_upper.iloc[i]
         else:
-            df['Supertrend'].iloc[i] = df['Supertrend'].iloc[i-1]
-
-    df.drop(['TR', 'ATR', 'Upper Basic', 'Lower Basic', 'Upper Band', 'Lower Band'], axis=1, inplace=True)
-    return df
+            supertrend.iloc[i] = 0.0
+    
+    # Calculate uptrend and downtrend indicators
+    upt = []
+    dt = []
+    Close = close.iloc[period:]  # Start from period to match supertrend values
+    
+    for i in range(len(Close)):
+        if Close.iloc[i] > supertrend.iloc[period+i]:
+            upt.append(supertrend.iloc[period+i])
+            dt.append(np.nan)
+        elif Close.iloc[i] < supertrend.iloc[period+i]:
+            upt.append(np.nan)
+            dt.append(supertrend.iloc[period+i])
+        else:
+            upt.append(np.nan)
+            dt.append(np.nan)
+    
+    # Convert to Series with proper indexing
+    st = pd.Series(supertrend.iloc[period:].values, index=Close.index)
+    upt = pd.Series(upt, index=Close.index)
+    dt = pd.Series(dt, index=Close.index)
+    
+    return st, upt, dt
 
 # Define the TradingSystem class
 class TradingSystem:
@@ -272,8 +300,22 @@ class TradingSystem:
         equity_max = max(plot_long_equity.max(), plot_short_equity.max(), combined_equity.max())
         fig.update_yaxes(range=[price_min * 0.95, price_max * 1.05], row=1, col=1)
         fig.update_yaxes(range=[equity_min * 1.1 if equity_min < 0 else equity_min * 0.9, equity_max * 1.1], row=2, col=1)  # Adjusted to cover negative values
+        
+        # Add Supertrend to the plot
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['Supertrend'],
+                mode='lines',
+                name='Supertrend',
+                line=dict(color='orange', width=2)
+            ),
+            row=1, col=1
+        )
+
+        fig.show()
         return fig
-    
+
     def _add_equity_curve(self, fig, equity_curve, name, color, row, col):
         fig.add_trace(
             go.Scatter(
@@ -295,71 +337,93 @@ class TradingSystem:
                 print(f"{key}: {value}")
 
 def main():
-	stock_symbol = "MSFT"
-	system = TradingSystem()
-	print(stock_symbol)
-	end_date = datetime.now()
-	start_date = end_date - timedelta(days=365)
-	btc_data = yf.download(stock_symbol, start=start_date, end=end_date)
-	print("Available columns in btc_data:")
-	print(btc_data.columns)
-	
-	# Flatten the DataFrame to handle MultiIndex columns
-	btc_data = flatten_dataframe(btc_data)
-	
-	if 'TrendUp' not in btc_data.columns:
-		try:
-			close_col = f'Close_{stock_symbol}'
-			btc_data['ShortMA'] = btc_data[close_col].rolling(window=20).mean()
-			btc_data['LongMA'] = btc_data[close_col].rolling(window=50).mean()
-			btc_data['TrendUp'] = btc_data['ShortMA'] > btc_data['LongMA']
-			btc_data['TrendUp'] = btc_data['TrendUp'].fillna(False)
-			print("TrendUp column created successfully")
-		except Exception as e:
-			print(f"Error creating TrendUp column: {e}")
-			print("Available columns:", btc_data.columns)
-			
-	if 'TrendDown' not in btc_data.columns:
-		btc_data['TrendDown'] = ~btc_data['TrendUp']
-		
-	long_trades, short_trades = system.generate_trading_lists(btc_data, stock_symbol)
-	
-	# Improved format for trade lists
-	long_trades_df = pd.DataFrame(long_trades)
-	short_trades_df = pd.DataFrame(short_trades)
-	
-	print("Long Trades:")
-	print(long_trades_df.to_string(index=False))
-	print("\nShort Trades:")
-	print(short_trades_df.to_string(index=False))
-	
-	long_equity = system.calculate_equity_curve(btc_data, long_trades)
-	short_equity = system.calculate_equity_curve(btc_data, short_trades)
-	print('Long equity')
-	print(long_equity.tail())
-	print('Short equity')
-	print(short_equity.tail())
-	long_stats = system.calculate_trade_statistics(long_trades, long_equity)
-	short_stats = system.calculate_trade_statistics(short_trades, short_equity)
-	system.print_statistics(long_stats, "Long")
-	system.print_statistics(short_stats, "Short")
-	print("Candlestick Data for Plot:")
-	btc_data_flat = flatten_dataframe(btc_data)  # Ensure DataFrame is flattened for plotting
-	fig = system.plot_results(btc_data_flat, long_trades, short_trades, long_equity, short_equity, stock_symbol)
-	fig.show()
-	print("BTC Data Null Values:", btc_data.isnull().sum())
-	print("Short Equity Null Values:", short_equity.isnull().sum())
-	print("Candlestick Chart Data:")
-	try:
-		print(btc_data[[f'Open_{stock_symbol}', f'High_{stock_symbol}', f'Low_{stock_symbol}', f'Close_{stock_symbol}']].dropna().head())
-	except KeyError:
-		try:
-			print(btc_data[['Open_BTC-EUR', 'High_BTC-EUR', 'Low_BTC-EUR', 'Close_BTC-EUR']].dropna().head())
-		except KeyError:
-			print("Could not access OHLC columns - see available columns above")
+    stock_symbol = "MSFT"
+    system = TradingSystem()
+    print(stock_symbol)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365)
+    btc_data = yf.download(stock_symbol, start=start_date, end=end_date)
+    print("Available columns in btc_data:")
+    print(btc_data.columns)
+    
+    # Flatten the DataFrame to handle MultiIndex columns
+    btc_data = flatten_dataframe(btc_data)
+    
+    if 'TrendUp' not in btc_data.columns:
+        try:
+            close_col = f'Close_{stock_symbol}'
+            btc_data['ShortMA'] = btc_data[close_col].rolling(window=20).mean()
+            btc_data['LongMA'] = btc_data[close_col].rolling(window=50).mean()
+            btc_data['TrendUp'] = btc_data['ShortMA'] > btc_data['LongMA']
+            btc_data['TrendUp'] = btc_data['TrendUp'].fillna(False)
+            print("TrendUp column created successfully")
+        except Exception as e:
+            print(f"Error creating TrendUp column: {e}")
+            print("Available columns:", btc_data.columns)
+            
+    if 'TrendDown' not in btc_data.columns:
+        btc_data['TrendDown'] = ~btc_data['TrendUp']
+
+    # Calculate Supertrend
+    st, s_upt, st_dt = get_supertrend(btc_data['High_MSFT'], btc_data['Low_MSFT'], btc_data['Close_MSFT'], 7, 3)
+    btc_data['Supertrend'] = st
+    btc_data['SupertrendUp'] = s_upt
+    btc_data['SupertrendDown'] = st_dt
+    
+    long_trades, short_trades = system.generate_trading_lists(btc_data, stock_symbol)
+    
+    # Improved format for trade lists
+    long_trades_df = pd.DataFrame(long_trades)
+    short_trades_df = pd.DataFrame(short_trades)
+    
+    print("Long Trades:")
+    print(long_trades_df.to_string(index=False))
+    print("\nShort Trades:")
+    print(short_trades_df.to_string(index=False))
+    
+    long_equity = system.calculate_equity_curve(btc_data, long_trades)
+    short_equity = system.calculate_equity_curve(btc_data, short_trades)
+    print('Long equity')
+    print(long_equity.tail())
+    print('Short equity')
+    print(short_equity.tail())
+    long_stats = system.calculate_trade_statistics(long_trades, long_equity)
+    short_stats = system.calculate_trade_statistics(short_trades, short_equity)
+    system.print_statistics(long_stats, "Long")
+    system.print_statistics(short_stats, "Short")
+    print("Candlestick Data for Plot:")
+    btc_data_flat = flatten_dataframe(btc_data)  # Ensure DataFrame is flattened for plotting
+    fig = system.plot_results(btc_data_flat, long_trades, short_trades, long_equity, short_equity, stock_symbol)
+    
+    # Add Supertrend to the plot with changing colors
+    for start, end in zip(btc_data.index[:-1], btc_data.index[1:]):
+        color = 'green' if btc_data['Close_MSFT'][start] > btc_data['Supertrend'][start] else 'red'
+        fig.add_trace(
+            go.Scatter(
+                x=[start, end],
+                y=[btc_data['Supertrend'][start], btc_data['Supertrend'][end]],
+                mode='lines',
+                line=dict(color=color, width=2),
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+    
+    fig.show()
+    print("BTC Data Null Values:", btc_data.isnull().sum())
+    print("Short Equity Null Values:", short_equity.isnull().sum())
+    print("Candlestick Chart Data:")
+    try:
+        print(btc_data[[f'Open_{stock_symbol}', f'High_{stock_symbol}', f'Low_{stock_symbol}', f'Close_{stock_symbol}']].dropna().head())
+    except KeyError:
+        try:
+            print(btc_data[['Open_BTC-EUR', 'High_BTC-EUR', 'Low_BTC-EUR', 'Close_BTC-EUR']].dropna().head())
+        except KeyError:
+            print("Could not access OHLC columns - see available columns above")
 
 import plotly.io as pio
 pio.renderers.default = 'browser'
 
 if __name__ == "__main__":
-	main()
+    main()
+	
