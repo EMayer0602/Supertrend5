@@ -297,63 +297,75 @@ class TradingSystem:
 				print(f"{key}: {value:.2f}")
 			else:
 				print(f"{key}: {value}")
-
-def main():
 	stock_symbol = "AAPL"
-	system = TradingSystem()
-	print(stock_symbol)
-	end_date = datetime.now()
-	start_date = end_date - timedelta(days=365)
-	btc_data = yf.download(stock_symbol, start=start_date, end=end_date)
-	print("Available columns in btc_data:")
-	print(btc_data.columns)
-	
-	# Flatten the DataFrame to handle MultiIndex columns
-	btc_data = flatten_dataframe(btc_data)
-	
-	if 'TrendUp' not in btc_data.columns:
-		try:
-			close_col = 'Close_AAPL'
-			btc_data['ShortMA'] = btc_data[close_col].rolling(window=20).mean()
-			btc_data['LongMA'] = btc_data[close_col].rolling(window=50).mean()
-			btc_data['TrendUp'] = btc_data['ShortMA'] > btc_data['LongMA']
-			btc_data['TrendUp'] = btc_data['TrendUp'].fillna(False)
-			print("TrendUp column created successfully")
-		except Exception as e:
-			print(f"Error creating TrendUp column: {e}")
-			print("Available columns:", btc_data.columns)
-			
-	if 'TrendDown' not in btc_data.columns:
-		btc_data['TrendDown'] = ~btc_data['TrendUp']
-		
-	long_trades, short_trades = system.generate_trading_lists(btc_data)
-	print("Long Trades:", long_trades)
-	print("Short Trades:", short_trades)
-	long_equity = system.calculate_equity_curve(btc_data, long_trades)
-	short_equity = system.calculate_equity_curve(btc_data, short_trades)
-	print('Long equity')
-	print(long_equity.tail())
-	print('Short equity')
-	print(short_equity.tail())
-	long_stats = system.calculate_trade_statistics(long_trades, long_equity)
-	short_stats = system.calculate_trade_statistics(short_trades, short_equity)
-	system.print_statistics(long_stats, "Long")
-	system.print_statistics(short_stats, "Short")
-	print("Candlestick Data for Plot:")
-	btc_data_flat = flatten_dataframe(btc_data)  # Ensure DataFrame is flattened for plotting
-	fig = system.plot_results(btc_data_flat, long_trades, short_trades, long_equity, short_equity)
-	fig.show()
-	print("BTC Data Null Values:", btc_data.isnull().sum())
-	print("Short Equity Null Values:", short_equity.isnull().sum())
-	print("Candlestick Chart Data:")
-	try:
-		print(btc_data[['open', 'high', 'low', 'close']].dropna().head())
-	except KeyError:
-		try:
-			print(btc_data[['Open_AAPL', 'High_AAPL', 'Low_AAPL', 'Close_AAPL']].dropna().head())
-		except KeyError:
-			print("Could not access OHLC columns - see available columns above")
+def main():
+    system = TradingSystem()
+    print(stock_symbol)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365)
+    btc_data = yf.download(stock_symbol, start=start_date, end=end_date)
+    print("Available columns in btc_data:")
+    print(btc_data.columns)
+    
+    # Flatten the DataFrame to handle MultiIndex columns
+    btc_data = flatten_dataframe(btc_data)
+    
+    if 'TrendUp' not in btc_data.columns:
+        try:
+            close_col = 'Close_AAPL'
+            btc_data['ShortMA'] = btc_data[close_col].rolling(window=20).mean()
+            btc_data['LongMA'] = btc_data[close_col].rolling(window=50).mean()
+            btc_data['TrendUp'] = btc_data['ShortMA'] > btc_data['LongMA']
+            btc_data['TrendUp'] = btc_data['TrendUp'].fillna(False)
+            print("TrendUp column created successfully")
+        except Exception as e:
+            print(f"Error creating TrendUp column: {e}")
+            print("Available columns:", btc_data.columns)
+            
+    if 'TrendDown' not in btc_data.columns:
+        btc_data['TrendDown'] = ~btc_data['TrendUp']
+        
+    long_trades, short_trades = system.generate_trading_lists(btc_data)
+    
+    # Improved format for trade lists
+    long_trades_df = pd.DataFrame(long_trades)
+    short_trades_df = pd.DataFrame(short_trades)
+    
+    print("Long Trades:")
+    print(long_trades_df.to_string(index=False))
+    print("\nShort Trades:")
+    print(short_trades_df.to_string(index=False))
+    
+    long_equity = system.calculate_equity_curve(btc_data, long_trades)
+    short_equity = system.calculate_equity_curve(btc_data, short_trades)
+    print('Long equity')
+    print(long_equity.tail())
+    print('Short equity')
+    print(short_equity.tail())
+    long_stats = system.calculate_trade_statistics(long_trades, long_equity)
+    short_stats = system.calculate_trade_statistics(short_trades, short_equity)
+    system.print_statistics(long_stats, "Long")
+    system.print_statistics(short_stats, "Short")
+    print("Candlestick Data for Plot:")
+    btc_data_flat = flatten_dataframe(btc_data)  # Ensure DataFrame is flattened for plotting
+    fig = system.plot_results(btc_data_flat, long_trades, short_trades, long_equity, short_equity)
+    fig.show()
+    print("BTC Data Null Values:", btc_data.isnull().sum())
+    print("Short Equity Null Values:", short_equity.isnull().sum())
+    print("Candlestick Chart Data:")
+    try:
+        print(btc_data[['open', 'high', 'low', 'close']].dropna().head())
+    except KeyError:
+        try:
+            print(btc_data[['Open_AAPL', 'High_AAPL', 'Low_AAPL', 'Close_AAPL']].dropna().head())
+        except KeyError:
+            print("Could not access OHLC columns - see available columns above")
 
+import plotly.io as pio
+pio.renderers.default = 'browser'
+
+if __name__ == "__main__":
+    main()
 import plotly.io as pio
 pio.renderers.default = 'browser'
 
