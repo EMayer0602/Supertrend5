@@ -79,9 +79,44 @@ def get_supertrend(high, low, close, period, multiplier):
     
     return st, upt, dt
 
+# Trading strategy implementation
+def implement_st_strategy(prices, st):
+    buy_price = []
+    sell_price = []
+    st_signal = []
+    signal = 0
+    
+    for i in range(len(st)):
+        if st.iloc[i-1] > prices.iloc[i-1] and st.iloc[i] < prices.iloc[i]:
+            if signal != 1:
+                buy_price.append(prices.iloc[i])
+                sell_price.append(np.nan)
+                signal = 1
+                st_signal.append(signal)
+            else:
+                buy_price.append(np.nan)
+                sell_price.append(np.nan)
+                st_signal.append(0)
+        elif st.iloc[i-1] < prices.iloc[i-1] and st.iloc[i] > prices.iloc[i]:
+            if signal != -1:
+                buy_price.append(np.nan)
+                sell_price.append(prices.iloc[i])
+                signal = -1
+                st_signal.append(signal)
+            else:
+                buy_price.append(np.nan)
+                sell_price.append(np.nan)
+                st_signal.append(0)
+        else:
+            buy_price.append(np.nan)
+            sell_price.append(np.nan)
+            st_signal.append(0)
+            
+    return buy_price, sell_price, st_signal
+
 # Define the TradingSystem class
 class TradingSystem:
-    def __init__(self, initial_capital=10000, position_size=1.0, stop_loss_pct=0.02, transaction_cost=0.001):
+    def __init__(self, initial_capital=10000, position_size=1.0, stop_loss_pct=0.92, transaction_cost=0.001):
         self.initial_capital = initial_capital
         self.position_size = position_size
         self.stop_loss_pct = stop_loss_pct
@@ -337,40 +372,49 @@ class TradingSystem:
                 print(f"{key}: {value}")
 
 def main():
-    stock_symbol = "MSFT"
+    stock_symbol = "HON"
     system = TradingSystem()
     print(stock_symbol)
     end_date = datetime.now()
     start_date = end_date - timedelta(days=365)
-    btc_data = yf.download(stock_symbol, start=start_date, end=end_date)
-    print("Available columns in btc_data:")
-    print(btc_data.columns)
+    stock_data = yf.download(stock_symbol, start=start_date, end=end_date)
+    print("Available columns in stock_data:")
+    print(stock_data.columns)
     
     # Flatten the DataFrame to handle MultiIndex columns
-    btc_data = flatten_dataframe(btc_data)
+    stock_data = flatten_dataframe(stock_data)
     
-    if 'TrendUp' not in btc_data.columns:
+    close_col = f'Close_{stock_symbol}'
+    high_col = f'High_{stock_symbol}'
+    low_col = f'Low_{stock_symbol}'
+    
+    if 'TrendUp' not in stock_data.columns:
         try:
-            close_col = f'Close_{stock_symbol}'
-            btc_data['ShortMA'] = btc_data[close_col].rolling(window=20).mean()
-            btc_data['LongMA'] = btc_data[close_col].rolling(window=50).mean()
-            btc_data['TrendUp'] = btc_data['ShortMA'] > btc_data['LongMA']
-            btc_data['TrendUp'] = btc_data['TrendUp'].fillna(False)
+            stock_data['ShortMA'] = stock_data[close_col].rolling(window=20).mean()
+            stock_data['LongMA'] = stock_data[close_col].rolling(window=50).mean()
+            stock_data['TrendUp'] = stock_data['ShortMA'] > stock_data['LongMA']
+            stock_data['TrendUp'] = stock_data['TrendUp'].fillna(False)
             print("TrendUp column created successfully")
         except Exception as e:
             print(f"Error creating TrendUp column: {e}")
-            print("Available columns:", btc_data.columns)
+            print("Available columns:", stock_data.columns)
             
-    if 'TrendDown' not in btc_data.columns:
-        btc_data['TrendDown'] = ~btc_data['TrendUp']
+    if 'TrendDown' not in stock_data.columns:
+        stock_data['TrendDown'] = ~stock_data['TrendUp']
 
     # Calculate Supertrend
-    st, s_upt, st_dt = get_supertrend(btc_data['High_MSFT'], btc_data['Low_MSFT'], btc_data['Close_MSFT'], 7, 3)
-    btc_data['Supertrend'] = st
-    btc_data['SupertrendUp'] = s_upt
-    btc_data['SupertrendDown'] = st_dt
+    st, s_upt, st_dt = get_supertrend(stock_data[high_col], stock_data[low_col], stock_data[close_col], 7, 3)
+    stock_data['Supertrend'] = st
+    stock_data['SupertrendUp'] = s_upt
+    stock_data['SupertrendDown'] = st_dt
+
+    # Implement the Supertrend trading strategy
+    buy_price, sell_price, st_signal = implement_st_strategy(stock_data[close_col], stock_data['Supertrend'])
+    stock_data['Buy_Signal_Price'] = buy_price
+    stock_data['Sell_Signal_Price'] = sell_price
+    stock_data['ST_Signal'] = st_signal
     
-    long_trades, short_trades = system.generate_trading_lists(btc_data, stock_symbol)
+    long_trades, short_trades = system.generate_trading_lists(stock_data, stock_symbol)
     
     # Improved format for trade lists
     long_trades_df = pd.DataFrame(long_trades)
@@ -381,8 +425,8 @@ def main():
     print("\nShort Trades:")
     print(short_trades_df.to_string(index=False))
     
-    long_equity = system.calculate_equity_curve(btc_data, long_trades)
-    short_equity = system.calculate_equity_curve(btc_data, short_trades)
+    long_equity = system.calculate_equity_curve(stock_data, long_trades)
+    short_equity = system.calculate_equity_curve(stock_data, short_trades)
     print('Long equity')
     print(long_equity.tail())
     print('Short equity')
@@ -392,32 +436,54 @@ def main():
     system.print_statistics(long_stats, "Long")
     system.print_statistics(short_stats, "Short")
     print("Candlestick Data for Plot:")
-    btc_data_flat = flatten_dataframe(btc_data)  # Ensure DataFrame is flattened for plotting
-    fig = system.plot_results(btc_data_flat, long_trades, short_trades, long_equity, short_equity, stock_symbol)
+    stock_data_flat = flatten_dataframe(stock_data)  # Ensure DataFrame is flattened for plotting
+    fig = system.plot_results(stock_data_flat, long_trades, short_trades, long_equity, short_equity, stock_symbol)
     
     # Add Supertrend to the plot with changing colors
-    for start, end in zip(btc_data.index[:-1], btc_data.index[1:]):
-        color = 'green' if btc_data['Close_MSFT'][start] > btc_data['Supertrend'][start] else 'red'
+    for start, end in zip(stock_data.index[:-1], stock_data.index[1:]):
+        color = 'green' if stock_data[close_col][start] > stock_data['Supertrend'][start] else 'red'
         fig.add_trace(
             go.Scatter(
                 x=[start, end],
-                y=[btc_data['Supertrend'][start], btc_data['Supertrend'][end]],
+                y=[stock_data['Supertrend'][start], stock_data['Supertrend'][end]],
                 mode='lines',
                 line=dict(color=color, width=2),
                 showlegend=False
             ),
             row=1, col=1
         )
+
+    # Add buy and sell signals to the plot
+    fig.add_trace(
+        go.Scatter(
+            x=stock_data.index,
+            y=stock_data['Buy_Signal_Price'],
+            mode='markers',
+            name='Buy Signal',
+            marker=dict(color='green', symbol='triangle-up', size=10)
+        ),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=stock_data.index,
+            y=stock_data['Sell_Signal_Price'],
+            mode='markers',
+            name='Sell Signal',
+            marker=dict(color='red', symbol='triangle-down', size=10)
+        ),
+        row=1, col=1
+    )
     
     fig.show()
-    print("BTC Data Null Values:", btc_data.isnull().sum())
+    print("Stock Data Null Values:", stock_data.isnull().sum())
     print("Short Equity Null Values:", short_equity.isnull().sum())
     print("Candlestick Chart Data:")
     try:
-        print(btc_data[[f'Open_{stock_symbol}', f'High_{stock_symbol}', f'Low_{stock_symbol}', f'Close_{stock_symbol}']].dropna().head())
+        print(stock_data[[f'Open_{stock_symbol}', f'High_{stock_symbol}', f'Low_{stock_symbol}', f'Close_{stock_symbol}']].dropna().head())
     except KeyError:
         try:
-            print(btc_data[['Open_BTC-EUR', 'High_BTC-EUR', 'Low_BTC-EUR', 'Close_BTC-EUR']].dropna().head())
+            print(stock_data[['Open_BTC-EUR', 'High_BTC-EUR', 'Low_BTC-EUR', 'Close_BTC-EUR']].dropna().head())
         except KeyError:
             print("Could not access OHLC columns - see available columns above")
 
@@ -426,4 +492,3 @@ pio.renderers.default = 'browser'
 
 if __name__ == "__main__":
     main()
-	
