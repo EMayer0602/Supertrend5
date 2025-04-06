@@ -12,6 +12,7 @@ def flatten_dataframe(df):
 		flattened_df.columns = ['_'.join(col).strip() for col in df.columns.values]
 	print(f"NaN values in flattened DataFrame: {flattened_df.isna().sum().sum()}")
 	return flattened_df
+
 # Function to calculate technical indicators and trend signals
 def calculate_indicators_and_trends(df, period=14):
 	df = df.copy()
@@ -52,7 +53,7 @@ class TradingSystem:
 		self.stop_loss_pct = stop_loss_pct
 		self.transaction_cost = transaction_cost
 
-	def generate_trading_lists(self, df):
+	def generate_trading_lists(self, df, symbol):
 		long_trades = []
 		short_trades = []
 		current_position = None
@@ -64,16 +65,16 @@ class TradingSystem:
 			trend_down = row.get('TrendDown', 0)
 			if trend_up and current_position is None:
 				current_position = 'Long'
-				entry_price = row['Close_AAPL']
+				entry_price = row[f'Close_{symbol}']
 				entry_index = i
 				entry_date = row.name
 			elif trend_down and current_position is None:
 				current_position = 'Short'
-				entry_price = row['Close_AAPL']
+				entry_price = row[f'Close_{symbol}']
 				entry_index = i
 				entry_date = row.name
 			elif trend_down and current_position == 'Long':
-				exit_price = row['Close_AAPL']
+				exit_price = row[f'Close_{symbol}']
 				exit_index = i
 				exit_date = row.name
 				profit_loss = (exit_price - entry_price) / entry_price
@@ -88,7 +89,7 @@ class TradingSystem:
 				})
 				current_position = None
 			elif trend_up and current_position == 'Short':
-				exit_price = row['Close_AAPL']
+				exit_price = row[f'Close_{symbol}']
 				exit_index = i
 				exit_date = row.name
 				profit_loss = (entry_price - exit_price) / entry_price
@@ -103,8 +104,6 @@ class TradingSystem:
 				})
 				current_position = None
 		return long_trades, short_trades
-		# Other methods remain unchanged
-		
 
 	def calculate_equity_curve(self, df, trades):
 		if not trades:
@@ -168,26 +167,27 @@ class TradingSystem:
 			"Max Drawdown": max_drawdown,
 			"Sharpe Ratio": sharpe_ratio
 		}
-	def plot_results(self, df, long_trades, short_trades, long_equity, short_equity):
+
+	def plot_results(self, df, long_trades, short_trades, long_equity, short_equity, symbol):
 		plot_df = df.iloc[15:]
 		plot_long_equity = long_equity.iloc[15:]
 		plot_short_equity = short_equity.iloc[15:]
 		print("Plot DataFrame (after index 15):")
-		print(plot_df[['Open_AAPL', 'High_AAPL', 'Low_AAPL', 'Close_AAPL']].dropna().head())
+		print(plot_df[[f'Open_{symbol}', f'High_{symbol}', f'Low_{symbol}', f'Close_{symbol}']].dropna().head())
 		fig = make_subplots(
 			rows=2, cols=1,
 			shared_xaxes=True,
 			vertical_spacing=0.05,
-			subplot_titles=('Price and Trades', 'Equity Curves'),
+			subplot_titles=(f'{symbol} Price and Trades', f'{symbol} Equity Curves'),
 			row_heights=[0.6, 0.4]
 		)
 		fig.add_trace(
 			go.Candlestick(
 				x=plot_df.index,
-				open=plot_df['Open_AAPL'],
-				high=plot_df['High_AAPL'],
-				low=plot_df['Low_AAPL'],
-				close=plot_df['Close_AAPL'],
+				open=plot_df[f'Open_{symbol}'],
+				high=plot_df[f'High_{symbol}'],
+				low=plot_df[f'Low_{symbol}'],
+				close=plot_df[f'Close_{symbol}'],
 				name='Candlestick'
 			),
 			row=1, col=1
@@ -251,7 +251,7 @@ class TradingSystem:
 		combined_equity = combined_equity.ffill().bfill()
 		self._add_equity_curve(fig, combined_equity, 'Combined Equity', 'blue', 2, 1)
 		fig.update_layout(
-			title='Trading System Results',
+			title=f'Trading System Results for {symbol}',
 			xaxis=dict(rangeslider=dict(visible=False)),  # Make the rangeslider for chart1 invisible
 			xaxis2=dict(rangeslider=dict(visible=True, thickness=0.05)),  # Ensure the rangeslider for chart2 is visible and as small as possible
 			yaxis_title='Price',
@@ -260,13 +260,15 @@ class TradingSystem:
 			showlegend=True,
 			legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
 		)
-		price_min = plot_df['Low_AAPL'].min()
-		price_max = plot_df['High_AAPL'].max()
+		price_min = plot_df[f'Low_{symbol}'].min()
+		price_max = plot_df[f'High_{symbol}'].max()
 		equity_min = min(plot_long_equity.min(), plot_short_equity.min(), combined_equity.min())
 		equity_max = max(plot_long_equity.max(), plot_short_equity.max(), combined_equity.max())
 		fig.update_yaxes(range=[price_min * 0.95, price_max * 1.05], row=1, col=1)
 		fig.update_yaxes(range=[equity_min * 1.1 if equity_min < 0 else equity_min * 0.9, equity_max * 1.1], row=2, col=1)  # Adjusted to cover negative values
+		fig.show()
 		return fig
+
 	def _add_indicator(self, fig, df, signal_column, name, color, row, col):
 		fig.add_trace(
 			go.Scatter(
@@ -297,75 +299,70 @@ class TradingSystem:
 				print(f"{key}: {value:.2f}")
 			else:
 				print(f"{key}: {value}")
-	stock_symbol = "AAPL"
 def main():
-    system = TradingSystem()
-    print(stock_symbol)
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
-    btc_data = yf.download(stock_symbol, start=start_date, end=end_date)
-    print("Available columns in btc_data:")
-    print(btc_data.columns)
-    
-    # Flatten the DataFrame to handle MultiIndex columns
-    btc_data = flatten_dataframe(btc_data)
-    
-    if 'TrendUp' not in btc_data.columns:
-        try:
-            close_col = 'Close_AAPL'
-            btc_data['ShortMA'] = btc_data[close_col].rolling(window=20).mean()
-            btc_data['LongMA'] = btc_data[close_col].rolling(window=50).mean()
-            btc_data['TrendUp'] = btc_data['ShortMA'] > btc_data['LongMA']
-            btc_data['TrendUp'] = btc_data['TrendUp'].fillna(False)
-            print("TrendUp column created successfully")
-        except Exception as e:
-            print(f"Error creating TrendUp column: {e}")
-            print("Available columns:", btc_data.columns)
-            
-    if 'TrendDown' not in btc_data.columns:
-        btc_data['TrendDown'] = ~btc_data['TrendUp']
-        
-    long_trades, short_trades = system.generate_trading_lists(btc_data)
-    
-    # Improved format for trade lists
-    long_trades_df = pd.DataFrame(long_trades)
-    short_trades_df = pd.DataFrame(short_trades)
-    
-    print("Long Trades:")
-    print(long_trades_df.to_string(index=False))
-    print("\nShort Trades:")
-    print(short_trades_df.to_string(index=False))
-    
-    long_equity = system.calculate_equity_curve(btc_data, long_trades)
-    short_equity = system.calculate_equity_curve(btc_data, short_trades)
-    print('Long equity')
-    print(long_equity.tail())
-    print('Short equity')
-    print(short_equity.tail())
-    long_stats = system.calculate_trade_statistics(long_trades, long_equity)
-    short_stats = system.calculate_trade_statistics(short_trades, short_equity)
-    system.print_statistics(long_stats, "Long")
-    system.print_statistics(short_stats, "Short")
-    print("Candlestick Data for Plot:")
-    btc_data_flat = flatten_dataframe(btc_data)  # Ensure DataFrame is flattened for plotting
-    fig = system.plot_results(btc_data_flat, long_trades, short_trades, long_equity, short_equity)
-    fig.show()
-    print("BTC Data Null Values:", btc_data.isnull().sum())
-    print("Short Equity Null Values:", short_equity.isnull().sum())
-    print("Candlestick Chart Data:")
-    try:
-        print(btc_data[['open', 'high', 'low', 'close']].dropna().head())
-    except KeyError:
-        try:
-            print(btc_data[['Open_AAPL', 'High_AAPL', 'Low_AAPL', 'Close_AAPL']].dropna().head())
-        except KeyError:
-            print("Could not access OHLC columns - see available columns above")
+	stock_symbol = "BTC-EUR"
+	system = TradingSystem()
+	print(stock_symbol)
+	end_date = datetime.now()
+	start_date = end_date - timedelta(days=365)
+	btc_data = yf.download(stock_symbol, start=start_date, end=end_date)
+	print("Available columns in btc_data:")
+	print(btc_data.columns)
+	
+	# Flatten the DataFrame to handle MultiIndex columns
+	btc_data = flatten_dataframe(btc_data)
+	
+	if 'TrendUp' not in btc_data.columns:
+		try:
+			close_col = f'Close_{stock_symbol}'
+			btc_data['ShortMA'] = btc_data[close_col].rolling(window=20).mean()
+			btc_data['LongMA'] = btc_data[close_col].rolling(window=50).mean()
+			btc_data['TrendUp'] = btc_data['ShortMA'] > btc_data['LongMA']
+			btc_data['TrendUp'] = btc_data['TrendUp'].fillna(False)
+			print("TrendUp column created successfully")
+		except Exception as e:
+			print(f"Error creating TrendUp column: {e}")
+			print("Available columns:", btc_data.columns)
+			
+	if 'TrendDown' not in btc_data.columns:
+		btc_data['TrendDown'] = ~btc_data['TrendUp']
+		
+	long_trades, short_trades = system.generate_trading_lists(btc_data, stock_symbol)
+	
+	# Improved format for trade lists
+	long_trades_df = pd.DataFrame(long_trades)
+	short_trades_df = pd.DataFrame(short_trades)
+	
+	print("Long Trades:")
+	print(long_trades_df.to_string(index=False))
+	print("\nShort Trades:")
+	print(short_trades_df.to_string(index=False))
+	
+	long_equity = system.calculate_equity_curve(btc_data, long_trades)
+	short_equity = system.calculate_equity_curve(btc_data, short_trades)
+	print('Long equity')
+	print(long_equity.tail())
+	print('Short equity')
+	print(short_equity.tail())
+	long_stats = system.calculate_trade_statistics(long_trades, long_equity)
+	short_stats = system.calculate_trade_statistics(short_trades, short_equity)
+	system.print_statistics(long_stats, "Long")
+	system.print_statistics(short_stats, "Short")
+	print("Candlestick Data for Plot:")
+	btc_data_flat = flatten_dataframe(btc_data)  # Ensure DataFrame is flattened for plotting
+	fig = system.plot_results(btc_data_flat, long_trades, short_trades, long_equity, short_equity, stock_symbol)
+	fig.show()
+	print("BTC Data Null Values:", btc_data.isnull().sum())
+	print("Short Equity Null Values:", short_equity.isnull().sum())
+	print("Candlestick Chart Data:")
+	try:
+		print(btc_data[[f'Open_{stock_symbol}', f'High_{stock_symbol}', f'Low_{stock_symbol}', f'Close_{stock_symbol}']].dropna().head())
+	except KeyError:
+		try:
+			print(btc_data[['Open_BTC-EUR', 'High_BTC-EUR', 'Low_BTC-EUR', 'Close_BTC-EUR']].dropna().head())
+		except KeyError:
+			print("Could not access OHLC columns - see available columns above")
 
-import plotly.io as pio
-pio.renderers.default = 'browser'
-
-if __name__ == "__main__":
-    main()
 import plotly.io as pio
 pio.renderers.default = 'browser'
 
