@@ -154,7 +154,8 @@ class TradingSystem:
                     'exit_price': exit_price,
                     'profit_loss': profit_loss,
                     'entry_index': entry_index,
-                    'exit_index': exit_index
+                    'exit_index': exit_index,
+                    'symbol': symbol
                 })
                 current_position = None
             elif trend_up and current_position == 'Short':
@@ -169,7 +170,8 @@ class TradingSystem:
                     'exit_price': exit_price,
                     'profit_loss': profit_loss,
                     'entry_index': entry_index,
-                    'exit_index': exit_index
+                    'exit_index': exit_index,
+                    'symbol': symbol
                 })
                 current_position = None
         return long_trades, short_trades
@@ -179,19 +181,25 @@ class TradingSystem:
             return pd.Series(self.initial_capital, index=df.index)
         equity_curve = pd.Series(index=df.index, dtype=float)
         equity_curve.iloc[0] = self.initial_capital
-        sorted_trades = sorted(trades, key=lambda x: x['entry_date'])
         current_capital = self.initial_capital
+        current_position = None
         for date in df.index:
-            daily_pnl = 0.0
-            for trade in sorted_trades:
-                entry_date = trade['entry_date']
-                exit_date = trade['exit_date']
-                if date == exit_date:
-                    daily_pnl += float(trade['profit_loss']) * self.initial_capital
-            current_capital += daily_pnl
-            equity_curve[date] = current_capital
-        equity_curve = equity_curve.ffill()
-        return equity_curve
+            if current_position:
+                daily_return = df.loc[date, f'Close_{current_position["symbol"]}'] / df.loc[current_position["entry_date"], f'Close_{current_position["symbol"]}'] - 1
+                current_capital = current_position["entry_capital"] * (1 + daily_return)
+                equity_curve.loc[date] = current_capital
+            else:
+                equity_curve.loc[date] = current_capital
+            for trade in trades:
+                if date == trade['entry_date']:
+                    current_position = {
+                        "symbol": trade["symbol"],
+                        "entry_date": trade["entry_date"],
+                        "entry_capital": current_capital,
+                    }
+                elif date == trade['exit_date'] and current_position:
+                    current_position = None
+        return equity_curve.ffill().bfill()
 
     def calculate_trade_statistics(self, trades, equity_curve):
         if not trades:
@@ -348,7 +356,6 @@ class TradingSystem:
             row=1, col=1
         )
 
-        fig.show()
         return fig
 
     def _add_equity_curve(self, fig, equity_curve, name, color, row, col):
