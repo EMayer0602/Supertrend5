@@ -5,122 +5,111 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Function to flatten dataframe
-def flatten_dataframe(df):
-    flattened_df = df.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        flattened_df.columns = ['_'.join(col).strip() for col in df.columns.values]
-    print(f"NaN values in flattened DataFrame: {flattened_df.isna().sum().sum()}")
-    return flattened_df
-
-# Function to calculate the Supertrend indicator
-def get_supertrend(high, low, close, period, multiplier):
-    # Calculate ATR
-    tr1 = high - low
-    tr2 = abs(high - close.shift(1))
-    tr3 = abs(low - close.shift(1))
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-    
-    # Calculate basic upper and lower bands
-    basic_upper = (high + low) / 2 + (multiplier * atr)
-    basic_lower = (high + low) / 2 - (multiplier * atr)
-    
-    # Initialize Supertrend columns
-    final_upper = pd.Series(0.0, index=close.index)
-    final_lower = pd.Series(0.0, index=close.index)
-    supertrend = pd.Series(0.0, index=close.index)
-    
-    # Calculate final upper and lower bands
-    for i in range(period, len(close)):
-        if basic_upper.iloc[i] < final_upper.iloc[i-1] or close.iloc[i-1] > final_upper.iloc[i-1]:
-            final_upper.iloc[i] = basic_upper.iloc[i]
-        else:
-            final_upper.iloc[i] = final_upper.iloc[i-1]
-            
-        if basic_lower.iloc[i] > final_lower.iloc[i-1] or close.iloc[i-1] < final_lower.iloc[i-1]:
-            final_lower.iloc[i] = basic_lower.iloc[i]
-        else:
-            final_lower.iloc[i] = final_lower.iloc[i-1]
-    
-    # Calculate Supertrend
-    for i in range(period, len(close)):
-        if supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] <= final_upper.iloc[i]:
-            supertrend.iloc[i] = final_upper.iloc[i]
-        elif supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] > final_upper.iloc[i]:
-            supertrend.iloc[i] = final_lower.iloc[i]
-        elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] >= final_lower.iloc[i]:
-            supertrend.iloc[i] = final_lower.iloc[i]
-        elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] < final_lower.iloc[i]:
-            supertrend.iloc[i] = final_upper.iloc[i]
-        else:
-            supertrend.iloc[i] = 0.0
-    
-    # Calculate uptrend and downtrend indicators
-    upt = []
-    dt = []
-    Close = close.iloc[period:]  # Start from period to match supertrend values
-    
-    for i in range(len(Close)):
-        if Close.iloc[i] > supertrend.iloc[period+i]:
-            upt.append(supertrend.iloc[period+i])
-            dt.append(np.nan)
-        elif Close.iloc[i] < supertrend.iloc[period+i]:
-            upt.append(np.nan)
-            dt.append(supertrend.iloc[period+i])
-        else:
-            upt.append(np.nan)
-            dt.append(np.nan)
-    
-    # Convert to Series with proper indexing
-    st = pd.Series(supertrend.iloc[period:].values, index=Close.index)
-    upt = pd.Series(upt, index=Close.index)
-    dt = pd.Series(dt, index=Close.index)
-    
-    return st, upt, dt
-
-# Trading strategy implementation
-def implement_st_strategy(prices, st):
-    buy_price = []
-    sell_price = []
-    st_signal = []
-    signal = 0
-    
-    for i in range(len(st)):
-        if st.iloc[i-1] > prices.iloc[i-1] and st.iloc[i] < prices.iloc[i]:
-            if signal != 1:
-                buy_price.append(prices.iloc[i])
-                sell_price.append(np.nan)
-                signal = 1
-                st_signal.append(signal)
-            else:
-                buy_price.append(np.nan)
-                sell_price.append(np.nan)
-                st_signal.append(0)
-        elif st.iloc[i-1] < prices.iloc[i-1] and st.iloc[i] > prices.iloc[i]:
-            if signal != -1:
-                buy_price.append(np.nan)
-                sell_price.append(prices.iloc[i])
-                signal = -1
-                st_signal.append(signal)
-            else:
-                buy_price.append(np.nan)
-                sell_price.append(np.nan)
-                st_signal.append(0)
-        else:
-            buy_price.append(np.nan)
-            sell_price.append(np.nan)
-            st_signal.append(0)
-            
-    return buy_price, sell_price, st_signal
-
-# Define the TradingSystem class
 class TradingSystem:
     def __init__(self, initial_capital=10000, position_size=1.0, stop_loss_pct=0.92, transaction_cost=0.001):
         self.initial_capital = initial_capital
         self.position_size = position_size
         self.stop_loss_pct = stop_loss_pct
         self.transaction_cost = transaction_cost
+
+    def flatten_dataframe(self, df):
+        flattened_df = df.copy()
+        if isinstance(df.columns, pd.MultiIndex):
+            flattened_df.columns = ['_'.join(col).strip() for col in df.columns.values]
+        print(f"NaN values in flattened DataFrame: {flattened_df.isna().sum().sum()}")
+        return flattened_df
+
+    def get_supertrend(self, high, low, close, period, multiplier):
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(period).mean()
+        
+        basic_upper = (high + low) / 2 + (multiplier * atr)
+        basic_lower = (high + low) / 2 - (multiplier * atr)
+        
+        final_upper = pd.Series(0.0, index=close.index)
+        final_lower = pd.Series(0.0, index=close.index)
+        supertrend = pd.Series(0.0, index=close.index)
+        
+        for i in range(period, len(close)):
+            if basic_upper.iloc[i] < final_upper.iloc[i-1] or close.iloc[i-1] > final_upper.iloc[i-1]:
+                final_upper.iloc[i] = basic_upper.iloc[i]
+            else:
+                final_upper.iloc[i] = final_upper.iloc[i-1]
+                
+            if basic_lower.iloc[i] > final_lower.iloc[i-1] or close.iloc[i-1] < final_lower.iloc[i-1]:
+                final_lower.iloc[i] = basic_lower.iloc[i]
+            else:
+                final_lower.iloc[i] = final_lower.iloc[i-1]
+        
+        for i in range(period, len(close)):
+            if supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] <= final_upper.iloc[i]:
+                supertrend.iloc[i] = final_upper.iloc[i]
+            elif supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] > final_upper.iloc[i]:
+                supertrend.iloc[i] = final_lower.iloc[i]
+            elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] >= final_lower.iloc[i]:
+                supertrend.iloc[i] = final_lower.iloc[i]
+            elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] < final_lower.iloc[i]:
+                supertrend.iloc[i] = final_upper.iloc[i]
+            else:
+                supertrend.iloc[i] = 0.0
+        
+        upt = []
+        dt = []
+        Close = close.iloc[period:]
+        
+        for i in range(len(Close)):
+            if Close.iloc[i] > supertrend.iloc[period+i]:
+                upt.append(supertrend.iloc[period+i])
+                dt.append(np.nan)
+            elif Close.iloc[i] < supertrend.iloc[period+i]:
+                upt.append(np.nan)
+                dt.append(supertrend.iloc[period+i])
+            else:
+                upt.append(np.nan)
+                dt.append(np.nan)
+        
+        st = pd.Series(supertrend.iloc[period:].values, index=Close.index)
+        upt = pd.Series(upt, index=Close.index)
+        dt = pd.Series(dt, index=Close.index)
+        
+        return st, upt, dt
+
+    def implement_st_strategy(self, prices, st):
+        buy_price = []
+        sell_price = []
+        st_signal = []
+        signal = 0
+        
+        for i in range(len(st)):
+            if st.iloc[i-1] > prices.iloc[i-1] and st.iloc[i] < prices.iloc[i]:
+                if signal != 1:
+                    buy_price.append(prices.iloc[i])
+                    sell_price.append(np.nan)
+                    signal = 1
+                    st_signal.append(signal)
+                else:
+                    buy_price.append(np.nan)
+                    sell_price.append(np.nan)
+                    st_signal.append(0)
+            elif st.iloc[i-1] < prices.iloc[i-1] and st.iloc[i] > prices.iloc[i]:
+                if signal != -1:
+                    buy_price.append(np.nan)
+                    sell_price.append(prices.iloc[i])
+                    signal = -1
+                    st_signal.append(signal)
+                else:
+                    buy_price.append(np.nan)
+                    sell_price.append(np.nan)
+                    st_signal.append(0)
+            else:
+                buy_price.append(np.nan)
+                sell_price.append(np.nan)
+                st_signal.append(0)
+                
+        return buy_price, sell_price, st_signal
 
     def generate_trading_lists(self, df, symbol):
         long_trades = []
@@ -245,10 +234,11 @@ class TradingSystem:
             "Sharpe Ratio": sharpe_ratio
         }
 
-    def plot_results(self, df, long_trades, short_trades, long_equity, short_equity, symbol):
+    def plot_results(self, df, long_trades, short_trades, long_equity, short_equity, buy_and_hold_equity, symbol):
         plot_df = df.iloc[15:]
         plot_long_equity = long_equity.iloc[15:]
         plot_short_equity = short_equity.iloc[15:]
+        plot_buy_and_hold_equity = buy_and_hold_equity.iloc[15:]
         print("Plot DataFrame (after index 15):")
         print(plot_df[[f'Open_{symbol}', f'High_{symbol}', f'Low_{symbol}', f'Close_{symbol}']].dropna().head())
         fig = make_subplots(
@@ -327,6 +317,7 @@ class TradingSystem:
         combined_equity = plot_long_equity + plot_short_equity - self.initial_capital
         combined_equity = combined_equity.ffill().bfill()
         self._add_equity_curve(fig, combined_equity, 'Combined Equity', 'blue', 2, 1)
+        self._add_equity_curve(fig, plot_buy_and_hold_equity, 'Buy and Hold Equity', 'blue', 2, 1)
         fig.update_layout(
             title=f'Trading System Results for {symbol}',
             xaxis=dict(rangeslider=dict(visible=False)),  # Make the rangeslider for chart1 invisible
@@ -339,8 +330,8 @@ class TradingSystem:
         )
         price_min = plot_df[f'Low_{symbol}'].min()
         price_max = plot_df[f'High_{symbol}'].max()
-        equity_min = min(plot_long_equity.min(), plot_short_equity.min(), combined_equity.min())
-        equity_max = max(plot_long_equity.max(), plot_short_equity.max(), combined_equity.max())
+        equity_min = min(plot_long_equity.min(), plot_short_equity.min(), combined_equity.min(), plot_buy_and_hold_equity.min())
+        equity_max = max(plot_long_equity.max(), plot_short_equity.max(), combined_equity.max(), plot_buy_and_hold_equity.max())
         fig.update_yaxes(range=[price_min * 0.95, price_max * 1.05], row=1, col=1)
         fig.update_yaxes(range=[equity_min * 1.1 if equity_min < 0 else equity_min * 0.9, equity_max * 1.1], row=2, col=1)  # Adjusted to cover negative values
         
@@ -356,6 +347,7 @@ class TradingSystem:
             row=1, col=1
         )
 
+        fig.show()
         return fig
 
     def _add_equity_curve(self, fig, equity_curve, name, color, row, col):
@@ -388,8 +380,7 @@ def main():
     print("Available columns in stock_data:")
     print(stock_data.columns)
     
-    # Flatten the DataFrame to handle MultiIndex columns
-    stock_data = flatten_dataframe(stock_data)
+    stock_data = system.flatten_dataframe(stock_data)
     
     close_col = f'Close_{stock_symbol}'
     high_col = f'High_{stock_symbol}'
@@ -410,13 +401,13 @@ def main():
         stock_data['TrendDown'] = ~stock_data['TrendUp']
 
     # Calculate Supertrend
-    st, s_upt, st_dt = get_supertrend(stock_data[high_col], stock_data[low_col], stock_data[close_col], 7, 3)
+    st, s_upt, st_dt = system.get_supertrend(stock_data[high_col], stock_data[low_col], stock_data[close_col], 7, 3)
     stock_data['Supertrend'] = st
     stock_data['SupertrendUp'] = s_upt
     stock_data['SupertrendDown'] = st_dt
 
     # Implement the Supertrend trading strategy
-    buy_price, sell_price, st_signal = implement_st_strategy(stock_data[close_col], stock_data['Supertrend'])
+    buy_price, sell_price, st_signal = system.implement_st_strategy(stock_data[close_col], stock_data['Supertrend'])
     stock_data['Buy_Signal_Price'] = buy_price
     stock_data['Sell_Signal_Price'] = sell_price
     stock_data['ST_Signal'] = st_signal
@@ -442,9 +433,23 @@ def main():
     short_stats = system.calculate_trade_statistics(short_trades, short_equity)
     system.print_statistics(long_stats, "Long")
     system.print_statistics(short_stats, "Short")
+
+    # Calculate Buy and Hold Strategy
+    buy_and_hold_equity = stock_data[close_col] / stock_data[close_col].iloc[0] * system.initial_capital
+    buy_and_hold_return = (buy_and_hold_equity.iloc[-1] - system.initial_capital) / system.initial_capital
+    buy_and_hold_max_drawdown = ((buy_and_hold_equity - buy_and_hold_equity.cummax()) / buy_and_hold_equity.cummax()).min()
+    buy_and_hold_daily_returns = buy_and_hold_equity.pct_change().dropna()
+    buy_and_hold_sharpe_ratio = np.sqrt(252) * (buy_and_hold_daily_returns.mean() / buy_and_hold_daily_returns.std())
+
+    print("\nBuy and Hold Strategy Statistics:")
+    print("=" * 50)
+    print(f"Total Return: {buy_and_hold_return:.2f}")
+    print(f"Max Drawdown: {buy_and_hold_max_drawdown:.2f}")
+    print(f"Sharpe Ratio: {buy_and_hold_sharpe_ratio:.2f}")
+
     print("Candlestick Data for Plot:")
-    stock_data_flat = flatten_dataframe(stock_data)  # Ensure DataFrame is flattened for plotting
-    fig = system.plot_results(stock_data_flat, long_trades, short_trades, long_equity, short_equity, stock_symbol)
+    stock_data_flat = system.flatten_dataframe(stock_data)  # Ensure DataFrame is flattened for plotting
+    fig = system.plot_results(stock_data_flat, long_trades, short_trades, long_equity, short_equity, buy_and_hold_equity, stock_symbol)
     
     # Add Supertrend to the plot with changing colors
     for start, end in zip(stock_data.index[:-1], stock_data.index[1:]):
@@ -480,6 +485,18 @@ def main():
             marker=dict(color='red', symbol='triangle-down', size=10)
         ),
         row=1, col=1
+    )
+    
+    # Add Buy and Hold equity curve to the plot
+    fig.add_trace(
+        go.Scatter(
+            x=buy_and_hold_equity.index,
+            y=buy_and_hold_equity.values,
+            mode='lines',
+            name='Buy and Hold Equity',
+            line=dict(color='blue', width=2)
+        ),
+        row=2, col=1
     )
     
     fig.show()
