@@ -15,35 +15,25 @@ def flatten_dataframe(df):
 
 # Function to calculate the Supertrend indicator
 def get_supertrend(high, low, close, period, multiplier):
-    # Calculate ATR
     tr1 = high - low
     tr2 = abs(high - close.shift(1))
     tr3 = abs(low - close.shift(1))
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(period).mean()
-    
-    # Calculate basic upper and lower bands
     basic_upper = (high + low) / 2 + (multiplier * atr)
     basic_lower = (high + low) / 2 - (multiplier * atr)
-    
-    # Initialize Supertrend columns
     final_upper = pd.Series(0.0, index=close.index)
     final_lower = pd.Series(0.0, index=close.index)
     supertrend = pd.Series(0.0, index=close.index)
-    
-    # Calculate final upper and lower bands
     for i in range(period, len(close)):
         if basic_upper.iloc[i] < final_upper.iloc[i-1] or close.iloc[i-1] > final_upper.iloc[i-1]:
             final_upper.iloc[i] = basic_upper.iloc[i]
         else:
             final_upper.iloc[i] = final_upper.iloc[i-1]
-            
         if basic_lower.iloc[i] > final_lower.iloc[i-1] or close.iloc[i-1] < final_lower.iloc[i-1]:
             final_lower.iloc[i] = basic_lower.iloc[i]
         else:
             final_lower.iloc[i] = final_lower.iloc[i-1]
-    
-    # Calculate Supertrend
     for i in range(period, len(close)):
         if supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] <= final_upper.iloc[i]:
             supertrend.iloc[i] = final_upper.iloc[i]
@@ -55,12 +45,9 @@ def get_supertrend(high, low, close, period, multiplier):
             supertrend.iloc[i] = final_upper.iloc[i]
         else:
             supertrend.iloc[i] = 0.0
-    
-    # Calculate uptrend and downtrend indicators
     upt = []
     dt = []
-    Close = close.iloc[period:]  # Start from period to match supertrend values
-    
+    Close = close.iloc[period:]
     for i in range(len(Close)):
         if Close.iloc[i] > supertrend.iloc[period+i]:
             upt.append(supertrend.iloc[period+i])
@@ -71,12 +58,9 @@ def get_supertrend(high, low, close, period, multiplier):
         else:
             upt.append(np.nan)
             dt.append(np.nan)
-    
-    # Convert to Series with proper indexing
     st = pd.Series(supertrend.iloc[period:].values, index=Close.index)
     upt = pd.Series(upt, index=Close.index)
     dt = pd.Series(dt, index=Close.index)
-    
     return st, upt, dt
 
 # Trading strategy implementation
@@ -85,7 +69,6 @@ def implement_st_strategy(prices, st):
     sell_price = []
     st_signal = []
     signal = 0
-    
     for i in range(len(st)):
         if st.iloc[i-1] > prices.iloc[i-1] and st.iloc[i] < prices.iloc[i]:
             if signal != 1:
@@ -111,7 +94,6 @@ def implement_st_strategy(prices, st):
             buy_price.append(np.nan)
             sell_price.append(np.nan)
             st_signal.append(0)
-            
     return buy_price, sell_price, st_signal
 
 # Define the TradingSystem class
@@ -238,23 +220,25 @@ class TradingSystem:
         win_rate = winning_trades / total_trades if total_trades > 0 else 0
         profit_factor = abs(total_profit / total_loss) if total_loss != 0 else float('inf')
         total_return = (equity_curve.iloc[-1] - self.initial_capital) / self.initial_capital
-        rolling_max = equity_curve.expanding().max()
-        drawdown = (equity_curve - rolling_max) / rolling_max
-        max_drawdown = abs(drawdown.min())
-        daily_returns = equity_curve.pct_change().dropna()
-        sharpe_ratio = np.sqrt(252) * (daily_returns.mean() / daily_returns.std()) if len(daily_returns) > 1 else 0
+        max_drawdown = abs((equity_curve - equity_curve.expanding().max()).min())
+        sharpe_ratio = np.sqrt(252) * (equity_curve.pct_change().dropna().mean() / equity_curve.pct_change().dropna().std()) if len(equity_curve.pct_change().dropna()) > 1 else 0
         return {
             "Total Trades": total_trades,
             "Winning Trades": winning_trades,
             "Losing Trades": losing_trades,
+            "Profits": profits,
+            "Losses": losses,
+            "Avg Profit": avg_profit,
+            "Avg Loss": avg_loss,
+            "Total Profit": total_profit,
+            "Total Loss": total_loss,
             "Win Rate": win_rate,
-            "Average Profit": avg_profit,
-            "Average Loss": avg_loss,
             "Profit Factor": profit_factor,
             "Total Return": total_return,
             "Max Drawdown": max_drawdown,
-            "Sharpe Ratio": sharpe_ratio
+            "Sharpe Ratio": sharpe_ratio,
         }
+
     def plot_results(self, df, long_trades, short_trades, long_equity, short_equity, buy_and_hold_equity, symbol):
         plot_df = df.iloc[15:]
         plot_long_equity = long_equity.iloc[15:]
@@ -432,6 +416,7 @@ class TradingSystem:
     
         return fig
 
+
     def _add_equity_curve(self, fig, equity_curve, name, color, row, col):
         fig.add_trace(
             go.Scatter(
@@ -442,17 +427,24 @@ class TradingSystem:
             ),
             row=row, col=col
         )
-
     def print_statistics(self, stats, trade_type=""):
         print(f"\n{trade_type} Trading Statistics:")
         print("=" * 50)
+        excluded_keys = ["Daily Returns", "Rolling Max", "Drawdown"]
         for key, value in stats.items():
+            if key in excluded_keys:
+                continue
             if isinstance(value, float):
                 print(f"{key}: {value:.2f}")
+            elif isinstance(value, list):
+                formatted_list = ', '.join(f"{v:.2f}" if isinstance(v, float) else str(v) for v in value)
+                print(f"{key}: {formatted_list}")
+            elif isinstance(value, pd.Series):
+                formatted_series = value.to_string()
+                print(f"{key}:\n{formatted_series}")
             else:
                 print(f"{key}: {value}")
-                print(f"{key}: {value}")
-
+    
 def main():
     stock_symbol = "HON"
     system = TradingSystem()
