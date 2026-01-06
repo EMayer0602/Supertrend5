@@ -1457,9 +1457,311 @@ def run_multi_ticker_analysis():
     return all_results
 
 
+# =============================================================================
+# ENHANCED ANALYSIS - MARKET CHARACTERISTICS
+# =============================================================================
+def analyze_stock_characteristics(symbol: str, days_back: int = 1825) -> Dict:
+    """Analyze stock characteristics to determine strategy suitability"""
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days_back)
+        data = yf.download(symbol, start=start_date, end=end_date, progress=False)
+
+        if data.empty or len(data) < 100:
+            return {'symbol': symbol, 'error': 'No data'}
+
+        close = data['Close'].values.flatten() if isinstance(data['Close'].values[0], np.ndarray) else data['Close'].values
+        high = data['High'].values.flatten() if isinstance(data['High'].values[0], np.ndarray) else data['High'].values
+        low = data['Low'].values.flatten() if isinstance(data['Low'].values[0], np.ndarray) else data['Low'].values
+
+        # Calculate metrics
+        returns = np.diff(close) / close[:-1]
+
+        # Volatility (annualized)
+        volatility = np.std(returns) * np.sqrt(252)
+
+        # Total return
+        total_return = (close[-1] - close[0]) / close[0]
+
+        # Max Drawdown
+        running_max = np.maximum.accumulate(close)
+        drawdowns = (close - running_max) / running_max
+        max_drawdown = abs(np.min(drawdowns))
+
+        # Trend Strength (linear regression R²)
+        x = np.arange(len(close))
+        z = np.polyfit(x, close, 1)
+        p = np.poly1d(z)
+        ss_res = np.sum((close - p(x)) ** 2)
+        ss_tot = np.sum((close - np.mean(close)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+        # Trend direction from regression
+        trend_direction = "bullish" if z[0] > 0 else "bearish"
+
+        # Average True Range (as % of price)
+        atr_pct = calculate_atr(high, low, close, 14)[-100:].mean() / close[-1]
+
+        # Classify stock
+        if volatility > 0.40:
+            vol_class = "HIGH"
+        elif volatility > 0.25:
+            vol_class = "MEDIUM"
+        else:
+            vol_class = "LOW"
+
+        if r_squared > 0.7:
+            trend_class = "STRONG"
+        elif r_squared > 0.4:
+            trend_class = "MODERATE"
+        else:
+            trend_class = "WEAK"
+
+        # Strategy recommendation
+        if trend_class == "STRONG" and trend_direction == "bullish" and vol_class == "LOW":
+            recommendation = "BUY_AND_HOLD"
+            reason = "Strong uptrend, low volatility - B&H likely optimal"
+        elif vol_class in ["HIGH", "MEDIUM"] or trend_class == "WEAK":
+            recommendation = "SUPERTREND"
+            reason = "High volatility or weak trend - Supertrend can add value"
+        elif max_drawdown > 0.30:
+            recommendation = "SUPERTREND"
+            reason = "High drawdown risk - Supertrend provides protection"
+        else:
+            recommendation = "NEUTRAL"
+            reason = "Mixed characteristics - test both approaches"
+
+        return {
+            'symbol': symbol,
+            'volatility': volatility,
+            'vol_class': vol_class,
+            'total_return': total_return,
+            'max_drawdown': max_drawdown,
+            'r_squared': r_squared,
+            'trend_class': trend_class,
+            'trend_direction': trend_direction,
+            'atr_pct': atr_pct,
+            'recommendation': recommendation,
+            'reason': reason,
+            'data_days': len(data)
+        }
+    except Exception as e:
+        return {'symbol': symbol, 'error': str(e)}
+
+
+def run_enhanced_analysis():
+    """Run enhanced analysis with market classification"""
+    print("="*80)
+    print("ENHANCED MULTI-TICKER ANALYSIS WITH MARKET CLASSIFICATION")
+    print("="*80)
+
+    # Test sample of stocks
+    test_stocks = [
+        # High performers from previous test
+        'NFLX', 'META', 'TSLA', 'AMD', 'ADBE', 'PYPL', 'BA', 'DIS',
+        # Low performers from previous test
+        'NVDA', 'AVGO', 'GS', 'CAT', 'AAPL', 'MSFT', 'JPM',
+        # Additional variety
+        'SPY', 'QQQ', 'ARKK', 'XLF', 'XLE'
+    ]
+
+    results = []
+    strategy_results = []
+
+    print("\n--- ANALYZING STOCK CHARACTERISTICS ---\n")
+
+    for symbol in test_stocks:
+        print(f"Analyzing {symbol}...", end=" ")
+        char = analyze_stock_characteristics(symbol, 1825)
+
+        if 'error' in char:
+            print(f"Error: {char['error']}")
+            continue
+
+        results.append(char)
+        print(f"Vol: {char['vol_class']}, Trend: {char['trend_class']} ({char['trend_direction']}), Rec: {char['recommendation']}")
+
+        # Also run strategy test
+        strat_result = test_ticker(symbol, 1825)
+        if 'error' not in strat_result:
+            strat_result.update(char)
+            strategy_results.append(strat_result)
+
+    # Analyze correlations
+    print("\n" + "="*80)
+    print("ANALYSIS RESULTS")
+    print("="*80)
+
+    # Group by recommendation
+    supertrend_recs = [r for r in strategy_results if r['recommendation'] == 'SUPERTREND']
+    bh_recs = [r for r in strategy_results if r['recommendation'] == 'BUY_AND_HOLD']
+    neutral_recs = [r for r in strategy_results if r['recommendation'] == 'NEUTRAL']
+
+    print("\n--- SUPERTREND RECOMMENDED STOCKS ---")
+    if supertrend_recs:
+        st_wins = [r for r in supertrend_recs if r.get('beats_bh', False)]
+        print(f"Total: {len(supertrend_recs)}, Strategy wins: {len(st_wins)} ({100*len(st_wins)/len(supertrend_recs):.0f}%)")
+        for r in sorted(supertrend_recs, key=lambda x: x.get('outperformance', 0) or 0, reverse=True):
+            outperf = r.get('outperformance', 0) or 0
+            marker = "✓" if r.get('beats_bh', False) else "✗"
+            print(f"  {r['symbol']}: Vol={r['vol_class']}, B&H={r['buy_hold']:.1%}, Strat={r['strategy']:.1%}, Out={outperf:+.1%} {marker}")
+
+    print("\n--- BUY & HOLD RECOMMENDED STOCKS ---")
+    if bh_recs:
+        st_wins = [r for r in bh_recs if r.get('beats_bh', False)]
+        print(f"Total: {len(bh_recs)}, Strategy wins: {len(st_wins)} ({100*len(st_wins)/len(bh_recs):.0f}%)")
+        for r in sorted(bh_recs, key=lambda x: x.get('outperformance', 0) or 0, reverse=True):
+            outperf = r.get('outperformance', 0) or 0
+            marker = "✓" if r.get('beats_bh', False) else "✗"
+            print(f"  {r['symbol']}: Vol={r['vol_class']}, B&H={r['buy_hold']:.1%}, Strat={r['strategy']:.1%}, Out={outperf:+.1%} {marker}")
+
+    print("\n--- NEUTRAL STOCKS ---")
+    if neutral_recs:
+        st_wins = [r for r in neutral_recs if r.get('beats_bh', False)]
+        print(f"Total: {len(neutral_recs)}, Strategy wins: {len(st_wins)} ({100*len(st_wins)/len(neutral_recs):.0f}%)")
+        for r in sorted(neutral_recs, key=lambda x: x.get('outperformance', 0) or 0, reverse=True):
+            outperf = r.get('outperformance', 0) or 0
+            marker = "✓" if r.get('beats_bh', False) else "✗"
+            print(f"  {r['symbol']}: Vol={r['vol_class']}, B&H={r['buy_hold']:.1%}, Strat={r['strategy']:.1%}, Out={outperf:+.1%} {marker}")
+
+    # Key insight
+    print("\n" + "="*80)
+    print("KEY INSIGHT")
+    print("="*80)
+
+    # Calculate accuracy of recommendation
+    correct_st = len([r for r in supertrend_recs if r.get('beats_bh', False)])
+    correct_bh = len([r for r in bh_recs if not r.get('beats_bh', False)])
+    total_correct = correct_st + correct_bh
+    total_recs = len(supertrend_recs) + len(bh_recs)
+
+    if total_recs > 0:
+        accuracy = 100 * total_correct / total_recs
+        print(f"\nRecommendation Accuracy: {accuracy:.0f}% ({total_correct}/{total_recs})")
+        print(f"  - Supertrend recommendations correct: {correct_st}/{len(supertrend_recs)}")
+        print(f"  - Buy & Hold recommendations correct: {correct_bh}/{len(bh_recs)}")
+
+    print("\n--- VOLATILITY vs STRATEGY PERFORMANCE ---")
+    high_vol = [r for r in strategy_results if r['vol_class'] == 'HIGH']
+    med_vol = [r for r in strategy_results if r['vol_class'] == 'MEDIUM']
+    low_vol = [r for r in strategy_results if r['vol_class'] == 'LOW']
+
+    for name, group in [('HIGH', high_vol), ('MEDIUM', med_vol), ('LOW', low_vol)]:
+        if group:
+            wins = len([r for r in group if r.get('beats_bh', False)])
+            avg_out = np.mean([r.get('outperformance', 0) or 0 for r in group])
+            print(f"  {name} Volatility: {wins}/{len(group)} beat B&H ({100*wins/len(group):.0f}%), Avg outperf: {avg_out:+.1%}")
+
+    return strategy_results
+
+
+def screen_for_supertrend_stocks():
+    """Screen stocks to find best candidates for Supertrend strategy"""
+    print("="*80)
+    print("SUPERTREND STOCK SCREENER")
+    print("="*80)
+    print("\nScreening stocks to find best candidates for Supertrend strategy...")
+    print("(Looking for HIGH volatility stocks where Supertrend beats Buy & Hold)\n")
+
+    # Expanded list of popular stocks to screen
+    candidates = [
+        # Tech
+        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'ADBE',
+        'CRM', 'PYPL', 'SQ', 'SHOP', 'SNOW', 'PLTR', 'COIN', 'ROKU', 'DKNG', 'RBLX',
+        # Finance
+        'JPM', 'BAC', 'GS', 'MS', 'C', 'WFC', 'AXP', 'V', 'MA', 'SCHW',
+        # Healthcare
+        'JNJ', 'UNH', 'PFE', 'ABBV', 'MRK', 'LLY', 'BMY', 'AMGN', 'GILD', 'MRNA',
+        # Consumer
+        'WMT', 'HD', 'NKE', 'MCD', 'SBUX', 'TGT', 'LOW', 'COST', 'DIS', 'ABNB',
+        # Industrial
+        'BA', 'CAT', 'GE', 'HON', 'UPS', 'DE', 'LMT', 'RTX', 'MMM', 'F',
+        # Energy
+        'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'MPC', 'VLO', 'PSX', 'DVN',
+        # ETFs
+        'SPY', 'QQQ', 'IWM', 'DIA', 'ARKK', 'XLF', 'XLE', 'XLK', 'XLV', 'XLI'
+    ]
+
+    suitable_stocks = []
+    unsuitable_stocks = []
+
+    for i, symbol in enumerate(candidates, 1):
+        print(f"[{i}/{len(candidates)}] Screening {symbol}...", end=" ")
+
+        # Analyze characteristics
+        char = analyze_stock_characteristics(symbol, 1825)
+        if 'error' in char:
+            print(f"Error: {char['error']}")
+            continue
+
+        # Test strategy
+        result = test_ticker(symbol, 1825)
+        if 'error' in result:
+            print(f"Error: {result['error']}")
+            continue
+
+        result.update(char)
+
+        # Determine suitability
+        if char['vol_class'] == 'HIGH' and result.get('beats_bh', False):
+            result['suitability'] = 'EXCELLENT'
+            suitable_stocks.append(result)
+            print(f"✓ EXCELLENT - Vol={char['vol_class']}, Out={result['outperformance']:+.1%}")
+        elif char['vol_class'] in ['HIGH', 'MEDIUM'] and result.get('beats_bh', False):
+            result['suitability'] = 'GOOD'
+            suitable_stocks.append(result)
+            print(f"✓ GOOD - Vol={char['vol_class']}, Out={result['outperformance']:+.1%}")
+        elif char['vol_class'] == 'LOW':
+            result['suitability'] = 'BUY_HOLD'
+            unsuitable_stocks.append(result)
+            print(f"→ B&H Better - Vol={char['vol_class']}, Out={result['outperformance']:+.1%}")
+        else:
+            result['suitability'] = 'NEUTRAL'
+            unsuitable_stocks.append(result)
+            print(f"✗ Neutral - Vol={char['vol_class']}, Out={result.get('outperformance', 0):+.1%}")
+
+    # Results
+    print("\n" + "="*80)
+    print("SCREENING RESULTS")
+    print("="*80)
+
+    print(f"\n--- BEST FOR SUPERTREND ({len(suitable_stocks)} stocks) ---")
+    suitable_stocks.sort(key=lambda x: x.get('outperformance', 0) or 0, reverse=True)
+
+    for r in suitable_stocks[:20]:
+        outperf = r.get('outperformance', 0) or 0
+        suit = r.get('suitability', 'N/A')
+        print(f"  {r['symbol']:<6} [{suit}] Vol={r['vol_class']}, Strat={r['strategy']:.1%}, B&H={r['buy_hold']:.1%}, Out={outperf:+.1%}")
+
+    print(f"\n--- RECOMMENDATION: USE BUY & HOLD ({len([u for u in unsuitable_stocks if u['vol_class'] == 'LOW'])} stocks) ---")
+    low_vol = [u for u in unsuitable_stocks if u['vol_class'] == 'LOW']
+    for r in low_vol:
+        print(f"  {r['symbol']:<6} Vol={r['vol_class']}, B&H={r['buy_hold']:.1%} - Stable uptrend, B&H better")
+
+    # Summary
+    print("\n" + "="*80)
+    print("SUMMARY")
+    print("="*80)
+    print(f"\nTotal screened: {len(candidates)}")
+    print(f"Suitable for Supertrend: {len(suitable_stocks)} ({100*len(suitable_stocks)/len(candidates):.0f}%)")
+    print(f"Better with Buy & Hold: {len(low_vol)} ({100*len(low_vol)/len(candidates):.0f}%)")
+
+    if suitable_stocks:
+        top5 = suitable_stocks[:5]
+        print(f"\n>>> TOP 5 PICKS FOR SUPERTREND:")
+        for i, r in enumerate(top5, 1):
+            print(f"  {i}. {r['symbol']} - Outperformance: {r.get('outperformance', 0):+.1%}")
+
+    return suitable_stocks, unsuitable_stocks
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--multi":
         run_multi_ticker_analysis()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--enhanced":
+        run_enhanced_analysis()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--screen":
+        screen_for_supertrend_stocks()
     else:
         main()
