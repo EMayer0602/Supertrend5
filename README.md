@@ -178,11 +178,70 @@ Rank  Strategy                       Return    vs B&H   Trades
 
 ---
 
+## 5. IB Paper Trading (Live Trading Simulation)
+
+Handelt die Top 30 Supertrend-Aktien automatisch im Interactive Brokers Paper Trading Account.
+
+```bash
+# Voraussetzung: ib_insync installieren
+pip install ib_insync
+
+# Dry-Run (Simulation ohne IB-Verbindung)
+python ib_paper_trader.py --dry-run
+
+# Echtes Paper Trading (TWS/Gateway muss laufen)
+python ib_paper_trader.py
+
+# Nur Status anzeigen
+python ib_paper_trader.py --status
+```
+
+**Voraussetzungen:**
+- Interactive Brokers Paper Trading Account
+- TWS (Trader Workstation) oder IB Gateway läuft
+- API-Verbindung aktiviert (Port 7497 für TWS Paper)
+
+**Features:**
+- Handelt automatisch die Top 30 volatilen Aktien
+- 5% max pro Position, max 20 Positionen
+- 8% Stop-Loss + 12% Trailing Stop
+- Signale alle 5 Minuten aktualisiert
+- Persistenter State (überlebt Neustart)
+
+**Top 30 Aktien im Portfolio:**
+```
+NFLX, COIN, SHOP, META, DKNG, ARKK, MRNA, ROKU, PYPL, SNOW,
+TSLA, AMD, RBLX, ADBE, BA, DIS, CRM, NKE, TGT, PFE,
+UNH, LOW, SBUX, SQ, UBER, SNAP, PINS, DOCU, ZM, CRWD
+```
+
+---
+
 ## Dateien
 
-- `new5.py` - Hauptskript mit allen Funktionen
+- `new5.py` - Hauptskript mit allen Backtest-Funktionen
+- `ib_paper_trader.py` - IB Paper Trading System
 - `supertrend_*.html` - Generierte Charts
+- `ib_paper_trader_state.json` - Trading State (Positionen, Signale)
+- `ib_paper_trader.log` - Trading Log
 - `venv/` - Virtual Environment (nicht committen)
+
+---
+
+## Quick Start
+
+```bash
+# 1. Setup
+python -m venv venv
+source venv/bin/activate  # oder venv\Scripts\activate (Windows)
+pip install pandas numpy yfinance plotly ib_insync
+
+# 2. Screener laufen lassen um beste Aktien zu finden
+python new5.py --screen
+
+# 3. Paper Trading starten (erst --dry-run testen!)
+python ib_paper_trader.py --dry-run
+```
 
 ---
 
