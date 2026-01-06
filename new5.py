@@ -1293,5 +1293,173 @@ def main():
     }
 
 
+# =============================================================================
+# MULTI-TICKER ANALYSIS
+# =============================================================================
+def test_ticker(symbol: str, days_back: int = 1825) -> Dict:
+    """Test a single ticker and return results"""
+    config = TradingConfig(
+        symbol=symbol,
+        initial_capital=10000.0,
+        days_back=days_back,
+        use_htf_filter=True
+    )
+
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days_back)
+        stock_data = yf.download(symbol, start=start_date, end=end_date, progress=False)
+
+        if stock_data.empty or len(stock_data) < 100:
+            return {'symbol': symbol, 'error': 'No data'}
+
+        # Flatten columns
+        if isinstance(stock_data.columns, pd.MultiIndex):
+            stock_data.columns = ['_'.join(col).strip() for col in stock_data.columns.values]
+        else:
+            stock_data.columns = [f'{col}_{symbol}' for col in stock_data.columns]
+
+        close_col = f'Close_{symbol}'
+        high_col = f'High_{symbol}'
+        low_col = f'Low_{symbol}'
+
+        high = stock_data[high_col].values
+        low = stock_data[low_col].values
+        close = stock_data[close_col].values
+
+        buy_hold_return = (close[-1] - close[0]) / close[0]
+
+        # Quick optimization - test key parameter combinations
+        system = OptimizedTradingSystem(config)
+        rsi = calculate_rsi(close, 14)
+
+        best_return = -np.inf
+        best_params = None
+
+        # Test combinations
+        for period in [10, 15, 20, 25]:
+            for mult in [3.0, 4.0, 5.0, 6.0]:
+                for use_rsi in [True, False]:
+                    try:
+                        supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
+                        buy_signals, sell_signals = generate_signals_vectorized(close, supertrend, direction, None, False, "exit_only")
+
+                        rsi_arr = rsi if use_rsi else None
+                        long_trades, _ = system.generate_trades(stock_data, buy_signals, sell_signals, long_only=True, rsi=rsi_arr)
+
+                        if len(long_trades) < 2:
+                            continue
+
+                        _, _, combined_eq, _ = system.calculate_equity_curve_vectorized(stock_data, long_trades, [])
+                        total_return = (combined_eq[-1] - config.initial_capital) / config.initial_capital
+
+                        if total_return > best_return:
+                            best_return = total_return
+                            best_params = {'period': period, 'mult': mult, 'use_rsi': use_rsi, 'trades': len(long_trades)}
+                    except:
+                        pass
+
+        beats_bh = best_return > buy_hold_return if best_params else False
+
+        return {
+            'symbol': symbol,
+            'buy_hold': buy_hold_return,
+            'strategy': best_return,
+            'outperformance': best_return - buy_hold_return if best_params else None,
+            'beats_bh': beats_bh,
+            'params': best_params,
+            'data_days': len(stock_data)
+        }
+    except Exception as e:
+        return {'symbol': symbol, 'error': str(e)}
+
+
+def run_multi_ticker_analysis():
+    """Test strategy on Dow Jones 30 and NASDAQ Top 20"""
+    print("="*80)
+    print("MULTI-TICKER ANALYSIS - DOW JONES 30 & NASDAQ TOP 20")
+    print("="*80)
+
+    # Dow Jones 30 components
+    dow_jones = [
+        'AAPL', 'MSFT', 'JPM', 'V', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'CVX',
+        'MRK', 'KO', 'DIS', 'MCD', 'CSCO', 'VZ', 'NKE', 'INTC', 'IBM', 'GS',
+        'CAT', 'AXP', 'BA', 'HON', 'MMM', 'TRV', 'DOW', 'WBA', 'AMGN', 'CRM'
+    ]
+
+    # NASDAQ Top 20 (by market cap, excluding duplicates from Dow)
+    nasdaq_top = [
+        'NVDA', 'GOOG', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'PEP', 'COST', 'ADBE',
+        'NFLX', 'AMD', 'QCOM', 'TMUS', 'INTU', 'AMAT', 'ISRG', 'BKNG', 'ADP', 'PYPL'
+    ]
+
+    all_results = []
+
+    # Test Dow Jones
+    print("\n" + "-"*80)
+    print("TESTING DOW JONES 30")
+    print("-"*80)
+
+    for i, symbol in enumerate(dow_jones, 1):
+        print(f"[{i}/30] Testing {symbol}...", end=" ")
+        result = test_ticker(symbol, days_back=1825)
+        all_results.append(result)
+
+        if 'error' in result:
+            print(f"Error: {result['error']}")
+        else:
+            marker = "✓ BEATS" if result['beats_bh'] else "✗"
+            print(f"B&H: {result['buy_hold']:.1%} | Strategy: {result['strategy']:.1%} | {marker}")
+
+    # Test NASDAQ Top 20
+    print("\n" + "-"*80)
+    print("TESTING NASDAQ TOP 20")
+    print("-"*80)
+
+    for i, symbol in enumerate(nasdaq_top, 1):
+        print(f"[{i}/20] Testing {symbol}...", end=" ")
+        result = test_ticker(symbol, days_back=1825)
+        all_results.append(result)
+
+        if 'error' in result:
+            print(f"Error: {result['error']}")
+        else:
+            marker = "✓ BEATS" if result['beats_bh'] else "✗"
+            print(f"B&H: {result['buy_hold']:.1%} | Strategy: {result['strategy']:.1%} | {marker}")
+
+    # Summary
+    print("\n" + "="*80)
+    print("SUMMARY")
+    print("="*80)
+
+    valid_results = [r for r in all_results if 'error' not in r]
+    beating_bh = [r for r in valid_results if r['beats_bh']]
+
+    print(f"\nTotal tickers tested: {len(valid_results)}")
+    print(f"Strategies that BEAT Buy & Hold: {len(beating_bh)} ({100*len(beating_bh)/len(valid_results):.1f}%)")
+
+    if beating_bh:
+        print("\n--- WINNERS (Beat Buy & Hold) ---")
+        beating_bh.sort(key=lambda x: x['outperformance'], reverse=True)
+        for r in beating_bh:
+            print(f"  {r['symbol']}: Strategy {r['strategy']:.1%} vs B&H {r['buy_hold']:.1%} (+{r['outperformance']:.1%})")
+
+    # Average performance
+    avg_bh = np.mean([r['buy_hold'] for r in valid_results])
+    avg_strat = np.mean([r['strategy'] for r in valid_results])
+    avg_outperf = np.mean([r['outperformance'] for r in valid_results if r['outperformance'] is not None])
+
+    print(f"\n--- AVERAGES ---")
+    print(f"  Avg Buy & Hold Return: {avg_bh:.1%}")
+    print(f"  Avg Strategy Return:   {avg_strat:.1%}")
+    print(f"  Avg Outperformance:    {avg_outperf:+.1%}")
+
+    return all_results
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--multi":
+        run_multi_ticker_analysis()
+    else:
+        main()
