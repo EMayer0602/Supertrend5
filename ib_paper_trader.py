@@ -314,10 +314,17 @@ class IBPaperTrader:
                 import yfinance as yf
                 end = datetime.now()
                 start = end - timedelta(days=days)
-                df = yf.download(symbol, start=start, end=end, progress=False)
+                df = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
                 if df.empty:
                     return None
-                df.columns = [c.lower() for c in df.columns]
+
+                # Handle MultiIndex columns (new yfinance format)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [col[0].lower() for col in df.columns]
+                else:
+                    df.columns = [c.lower() for c in df.columns]
+
+                # Remove adj close if present
                 if 'adj close' in df.columns:
                     df = df.drop('adj close', axis=1)
                 return df
