@@ -1,530 +1,1152 @@
-import pandas as pd #
+import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from dataclasses import dataclass
+from typing import Tuple, List, Dict, Optional
+import warnings
+warnings.filterwarnings('ignore')
 
-# Function to flatten dataframe
-def flatten_dataframe(df):
-    flattened_df = df.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        flattened_df.columns = ['_'.join(col).strip() for col in df.columns.values]
-    print(f"NaN values in flattened DataFrame: {flattened_df.isna().sum().sum()}")
-    return flattened_df
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+@dataclass
+class TradingConfig:
+    """Configuration for the trading system"""
+    symbol: str = "MSFT"
+    initial_capital: float = 10000.0
+    transaction_cost: float = 0.001
 
-# Function to calculate the Supertrend indicator
-def get_supertrend(high, low, close, period, multiplier):
+    # Supertrend Parameters (will be optimized)
+    st_period: int = 10
+    st_multiplier: float = 3.0
+
+    # HTF Filter Parameters
+    htf_period: int = 10
+    htf_multiplier: float = 3.0
+    use_htf_filter: bool = True
+
+    # Backtest Period
+    days_back: int = 730  # 2 years for better statistics
+
+
+# =============================================================================
+# OPTIMIZED SUPERTREND CALCULATION (Vectorized with NumPy)
+# =============================================================================
+def calculate_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
+    """Calculate Average True Range using vectorized operations"""
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+
     tr1 = high - low
-    tr2 = abs(high - close.shift(1))
-    tr3 = abs(low - close.shift(1))
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-    basic_upper = (high + low) / 2 + (multiplier * atr)
-    basic_lower = (high + low) / 2 - (multiplier * atr)
-    final_upper = pd.Series(0.0, index=close.index)
-    final_lower = pd.Series(0.0, index=close.index)
-    supertrend = pd.Series(0.0, index=close.index)
-    for i in range(period, len(close)):
-        if basic_upper.iloc[i] < final_upper.iloc[i-1] or close.iloc[i-1] > final_upper.iloc[i-1]:
-            final_upper.iloc[i] = basic_upper.iloc[i]
-        else:
-            final_upper.iloc[i] = final_upper.iloc[i-1]
-        if basic_lower.iloc[i] > final_lower.iloc[i-1] or close.iloc[i-1] < final_lower.iloc[i-1]:
-            final_lower.iloc[i] = basic_lower.iloc[i]
-        else:
-            final_lower.iloc[i] = final_lower.iloc[i-1]
-    for i in range(period, len(close)):
-        if supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] <= final_upper.iloc[i]:
-            supertrend.iloc[i] = final_upper.iloc[i]
-        elif supertrend.iloc[i-1] == final_upper.iloc[i-1] and close.iloc[i] > final_upper.iloc[i]:
-            supertrend.iloc[i] = final_lower.iloc[i]
-        elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] >= final_lower.iloc[i]:
-            supertrend.iloc[i] = final_lower.iloc[i]
-        elif supertrend.iloc[i-1] == final_lower.iloc[i-1] and close.iloc[i] < final_lower.iloc[i]:
-            supertrend.iloc[i] = final_upper.iloc[i]
-        else:
-            supertrend.iloc[i] = 0.0
-    upt = []
-    dt = []
-    Close = close.iloc[period:]
-    for i in range(len(Close)):
-        if Close.iloc[i] > supertrend.iloc[period+i]:
-            upt.append(supertrend.iloc[period+i])
-            dt.append(np.nan)
-        elif Close.iloc[i] < supertrend.iloc[period+i]:
-            upt.append(np.nan)
-            dt.append(supertrend.iloc[period+i])
-        else:
-            upt.append(np.nan)
-            dt.append(np.nan)
-    st = pd.Series(supertrend.iloc[period:].values, index=Close.index)
-    upt = pd.Series(upt, index=Close.index)
-    dt = pd.Series(dt, index=Close.index)
-    return st, upt, dt
+    tr2 = np.abs(high - prev_close)
+    tr3 = np.abs(low - prev_close)
 
-# Trading strategy implementation
-def implement_st_strategy(prices, st):
-    buy_price = []
-    sell_price = []
-    st_signal = []
-    signal = 0
-    for i in range(len(st)):
-        if st.iloc[i-1] > prices.iloc[i-1] and st.iloc[i] < prices.iloc[i]:
-            if signal != 1:
-                buy_price.append(prices.iloc[i])
-                sell_price.append(np.nan)
-                signal = 1
-                st_signal.append(signal)
+    true_range = np.maximum(np.maximum(tr1, tr2), tr3)
+
+    # EMA-based ATR for smoother results
+    atr = np.zeros_like(true_range)
+    atr[:period] = np.nan
+    atr[period-1] = np.mean(true_range[:period])
+
+    multiplier = 2 / (period + 1)
+    for i in range(period, len(true_range)):
+        atr[i] = true_range[i] * multiplier + atr[i-1] * (1 - multiplier)
+
+    return atr
+
+
+def calculate_supertrend_vectorized(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+                                     period: int = 10, multiplier: float = 3.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Optimized Supertrend calculation using NumPy vectorization
+    Returns: (supertrend, direction, atr)
+    - direction: 1 = bullish (price above supertrend), -1 = bearish
+    """
+    n = len(close)
+    atr = calculate_atr(high, low, close, period)
+
+    hl2 = (high + low) / 2
+
+    # Basic bands
+    basic_upper = hl2 + (multiplier * atr)
+    basic_lower = hl2 - (multiplier * atr)
+
+    # Final bands
+    final_upper = np.zeros(n)
+    final_lower = np.zeros(n)
+    supertrend = np.zeros(n)
+    direction = np.zeros(n)
+
+    # Initialize
+    final_upper[period-1] = basic_upper[period-1]
+    final_lower[period-1] = basic_lower[period-1]
+
+    for i in range(period, n):
+        # Final Upper Band
+        if basic_upper[i] < final_upper[i-1] or close[i-1] > final_upper[i-1]:
+            final_upper[i] = basic_upper[i]
+        else:
+            final_upper[i] = final_upper[i-1]
+
+        # Final Lower Band
+        if basic_lower[i] > final_lower[i-1] or close[i-1] < final_lower[i-1]:
+            final_lower[i] = basic_lower[i]
+        else:
+            final_lower[i] = final_lower[i-1]
+
+    # Calculate Supertrend and Direction
+    for i in range(period, n):
+        if i == period:
+            if close[i] <= final_upper[i]:
+                supertrend[i] = final_upper[i]
+                direction[i] = -1
             else:
-                buy_price.append(np.nan)
-                sell_price.append(np.nan)
-                st_signal.append(0)
-        elif st.iloc[i-1] < prices.iloc[i-1] and st.iloc[i] > prices.iloc[i]:
-            if signal != -1:
-                buy_price.append(np.nan)
-                sell_price.append(prices.iloc[i])
-                signal = -1
-                st_signal.append(signal)
-            else:
-                buy_price.append(np.nan)
-                sell_price.append(np.nan)
-                st_signal.append(0)
+                supertrend[i] = final_lower[i]
+                direction[i] = 1
         else:
-            buy_price.append(np.nan)
-            sell_price.append(np.nan)
-            st_signal.append(0)
-    return buy_price, sell_price, st_signal
+            if supertrend[i-1] == final_upper[i-1]:
+                if close[i] <= final_upper[i]:
+                    supertrend[i] = final_upper[i]
+                    direction[i] = -1
+                else:
+                    supertrend[i] = final_lower[i]
+                    direction[i] = 1
+            else:
+                if close[i] >= final_lower[i]:
+                    supertrend[i] = final_lower[i]
+                    direction[i] = 1
+                else:
+                    supertrend[i] = final_upper[i]
+                    direction[i] = -1
 
-# Define the TradingSystem class
-class TradingSystem:
-    def __init__(self, initial_capital=10000, position_size=2.0, stop_loss_pct=0.92, transaction_cost=0.001):
-        self.initial_capital = initial_capital
-        self.position_size = position_size
-        self.stop_loss_pct = stop_loss_pct
-        self.transaction_cost = transaction_cost
+    return supertrend, direction, atr
 
-    def generate_trading_lists(self, df, symbol):
+
+# =============================================================================
+# HTF (HIGHER TIME FRAME) FILTER
+# =============================================================================
+def resample_to_weekly(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Resample daily data to weekly for HTF analysis"""
+    ohlc_dict = {
+        f'Open_{symbol}': 'first',
+        f'High_{symbol}': 'max',
+        f'Low_{symbol}': 'min',
+        f'Close_{symbol}': 'last',
+        f'Volume_{symbol}': 'sum'
+    }
+
+    weekly = df.resample('W').agg(ohlc_dict).dropna()
+    return weekly
+
+
+def get_htf_trend(daily_df: pd.DataFrame, symbol: str, period: int, multiplier: float) -> pd.Series:
+    """
+    Calculate HTF (Weekly) Supertrend and map back to daily timeframe
+    Returns: Series with HTF direction aligned to daily index
+    """
+    weekly_df = resample_to_weekly(daily_df, symbol)
+
+    if len(weekly_df) < period + 5:
+        print("Warning: Not enough weekly data for HTF filter")
+        return pd.Series(1, index=daily_df.index)
+
+    high = weekly_df[f'High_{symbol}'].values
+    low = weekly_df[f'Low_{symbol}'].values
+    close = weekly_df[f'Close_{symbol}'].values
+
+    _, htf_direction, _ = calculate_supertrend_vectorized(high, low, close, period, multiplier)
+
+    # Create weekly direction series
+    htf_series = pd.Series(htf_direction, index=weekly_df.index)
+
+    # Forward-fill to daily timeframe
+    daily_htf = htf_series.reindex(daily_df.index, method='ffill')
+    daily_htf = daily_htf.fillna(method='bfill')
+
+    return daily_htf
+
+
+# =============================================================================
+# VECTORIZED TRADING SIGNALS
+# =============================================================================
+def generate_signals_vectorized(close: np.ndarray, supertrend: np.ndarray,
+                                 direction: np.ndarray, htf_direction: Optional[np.ndarray] = None,
+                                 use_htf_filter: bool = True,
+                                 filter_mode: str = "trend_following") -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate buy/sell signals using vectorized operations
+
+    filter_mode options:
+    - "trend_following": Only trade in HTF direction (Long only when HTF bullish)
+    - "confirmation": Use HTF as confirmation (original strict mode)
+    - "exit_only": Use all entries, but HTF filters exits
+
+    Returns: (buy_signals, sell_signals) as boolean arrays
+    """
+    n = len(close)
+
+    # Detect direction changes
+    prev_direction = np.roll(direction, 1)
+    prev_direction[0] = 0
+
+    # Signal when direction changes from -1 to 1 (buy) or 1 to -1 (sell)
+    raw_buy = (prev_direction == -1) & (direction == 1)
+    raw_sell = (prev_direction == 1) & (direction == -1)
+
+    if use_htf_filter and htf_direction is not None:
+        if filter_mode == "trend_following":
+            # Only trade in direction of HTF trend
+            # Buy signals only when HTF is bullish, Sell signals to exit longs when direction changes
+            # No short trading - only long when HTF bullish
+            buy_signals = raw_buy & (htf_direction == 1)
+            # Exit long when either: sell signal AND still in HTF bullish, OR HTF turns bearish
+            sell_signals = raw_sell  # Always allow exits
+        elif filter_mode == "confirmation":
+            # Original strict mode - only enter when HTF confirms
+            buy_signals = raw_buy & (htf_direction == 1)
+            sell_signals = raw_sell & (htf_direction == -1)
+        else:  # exit_only
+            buy_signals = raw_buy
+            sell_signals = raw_sell
+    else:
+        buy_signals = raw_buy
+        sell_signals = raw_sell
+
+    return buy_signals, sell_signals
+
+
+# =============================================================================
+# OPTIMIZED TRADING SYSTEM CLASS
+# =============================================================================
+class OptimizedTradingSystem:
+    def __init__(self, config: TradingConfig):
+        self.config = config
+
+    def generate_trades(self, df: pd.DataFrame, buy_signals: np.ndarray,
+                        sell_signals: np.ndarray, long_only: bool = False) -> Tuple[List[Dict], List[Dict]]:
+        """Generate trade lists from signals
+
+        Args:
+            long_only: If True, only generate long trades (no shorts)
+        """
+        symbol = self.config.symbol
+        close_col = f'Close_{symbol}'
+
         long_trades = []
         short_trades = []
-        current_position = None
-        entry_price = None
-        entry_index = None
-        entry_date = None
-        for i, row in df.iterrows():
-            trend_up = row['TrendUp']
-            trend_down = row.get('TrendDown', 0)
-            if trend_up and current_position is None:
-                current_position = 'Long'
-                entry_price = row[f'Close_{symbol}']
-                entry_index = i
-                entry_date = row.name
-            elif trend_down and current_position is None:
-                current_position = 'Short'
-                entry_price = row[f'Close_{symbol}']
-                entry_index = i
-                entry_date = row.name
-            elif trend_down and current_position == 'Long':
-                exit_price = row[f'Close_{symbol}']
-                exit_index = i
-                exit_date = row.name
-                profit_loss = (exit_price - entry_price) / entry_price
-                long_trades.append({
-                    'entry_date': entry_date,
-                    'entry_price': entry_price,
-                    'exit_date': exit_date,
-                    'exit_price': exit_price,
-                    'profit_loss': profit_loss,
-                    'entry_index': entry_index,
-                    'exit_index': exit_index,
-                    'symbol': symbol
-                })
-                current_position = None
-            elif trend_up and current_position == 'Short':
-                exit_price = row[f'Close_{symbol}']
-                exit_index = i
-                exit_date = row.name
-                profit_loss = (entry_price - exit_price) / entry_price
-                short_trades.append({
-                    'entry_date': entry_date,
-                    'entry_price': entry_price,
-                    'exit_date': exit_date,
-                    'exit_price': exit_price,
-                    'profit_loss': profit_loss,
-                    'entry_index': entry_index,
-                    'exit_index': exit_index,
-                    'symbol': symbol
-                })
-                current_position = None
-        return long_trades, short_trades
-    
-    def calculate_equity_curve(self, df, trades):
-        if not trades:
-            return pd.Series(self.initial_capital, index=df.index)
-        equity_curve = pd.Series(index=df.index, dtype=float)
-        equity_curve.iloc[0] = self.initial_capital
-        current_capital = self.initial_capital
-        current_position = None
-        for date in df.index:
-            if current_position:
-                daily_return = df.loc[date, f'Close_{current_position["symbol"]}'] / df.loc[current_position["entry_date"], f'Close_{current_position["symbol"]}'] - 1
-                current_capital = current_position["entry_capital"] * (1 + daily_return)
-                equity_curve.loc[date] = current_capital
-            else:
-                equity_curve.loc[date] = current_capital
-            for trade in trades:
-                if pd.Timestamp(date) == pd.Timestamp(trade['entry_date']):
-                    current_position = {
-                        "symbol": trade["symbol"],
-                        "entry_date": trade["entry_date"],
-                        "entry_capital": current_capital,
-                    }
-                elif pd.Timestamp(date) == pd.Timestamp(trade['exit_date']) and current_position:
-                    current_position = None
-        return equity_curve.ffill().bfill()
 
-    def _add_equity_curve(self, fig, equity_curve, name, color, row, col):
-        fig.add_trace(
-            go.Scatter(
-                x=equity_curve.index,
-                y=equity_curve.values,
-                name=name,
-                line=dict(color=color)
-            ),
-            row=row, col=col
-        )
-    
-    def calculate_trade_statistics(self, trades, equity_curve):
+        position = None  # None, 'long', 'short'
+        entry_price = 0
+        entry_date = None
+        entry_idx = 0
+
+        close_prices = df[close_col].values
+        dates = df.index
+
+        for i in range(len(df)):
+            if buy_signals[i]:
+                # Close short position if exists
+                if position == 'short':
+                    profit_loss = (entry_price - close_prices[i]) / entry_price
+                    profit_loss -= self.config.transaction_cost * 2
+                    short_trades.append({
+                        'entry_date': entry_date,
+                        'entry_price': entry_price,
+                        'exit_date': dates[i],
+                        'exit_price': close_prices[i],
+                        'profit_loss': profit_loss,
+                        'entry_index': entry_idx,
+                        'exit_index': i
+                    })
+                    position = None
+
+                # Open long position
+                if position is None:
+                    position = 'long'
+                    entry_price = close_prices[i]
+                    entry_date = dates[i]
+                    entry_idx = i
+
+            elif sell_signals[i]:
+                # Close long position if exists
+                if position == 'long':
+                    profit_loss = (close_prices[i] - entry_price) / entry_price
+                    profit_loss -= self.config.transaction_cost * 2
+                    long_trades.append({
+                        'entry_date': entry_date,
+                        'entry_price': entry_price,
+                        'exit_date': dates[i],
+                        'exit_price': close_prices[i],
+                        'profit_loss': profit_loss,
+                        'entry_index': entry_idx,
+                        'exit_index': i
+                    })
+                    position = None
+
+                # Open short position only if not long_only mode
+                if not long_only and position is None:
+                    position = 'short'
+                    entry_price = close_prices[i]
+                    entry_date = dates[i]
+                    entry_idx = i
+
+        return long_trades, short_trades
+
+    def calculate_equity_curve_vectorized(self, df: pd.DataFrame,
+                                          long_trades: List[Dict],
+                                          short_trades: List[Dict]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Calculate equity curves using vectorized operations"""
+        n = len(df)
+        symbol = self.config.symbol
+        close_col = f'Close_{symbol}'
+        close_prices = df[close_col].values
+
+        long_equity = np.full(n, self.config.initial_capital)
+        short_equity = np.full(n, self.config.initial_capital)
+
+        # Process long trades
+        for trade in long_trades:
+            entry_idx = trade['entry_index']
+            exit_idx = trade['exit_index']
+            entry_price = trade['entry_price']
+
+            # Calculate daily equity during trade
+            for i in range(entry_idx, exit_idx + 1):
+                daily_return = (close_prices[i] - entry_price) / entry_price
+                daily_return -= self.config.transaction_cost  # Entry cost
+                if i == exit_idx:
+                    daily_return -= self.config.transaction_cost  # Exit cost
+
+                # Get capital at entry
+                capital_at_entry = long_equity[entry_idx - 1] if entry_idx > 0 else self.config.initial_capital
+                long_equity[i] = capital_at_entry * (1 + daily_return)
+
+            # Carry forward equity after trade
+            if exit_idx + 1 < n:
+                for i in range(exit_idx + 1, n):
+                    if i < n and (not any(t['entry_index'] <= i <= t['exit_index'] for t in long_trades if t != trade)):
+                        long_equity[i] = long_equity[exit_idx]
+
+        # Process short trades
+        for trade in short_trades:
+            entry_idx = trade['entry_index']
+            exit_idx = trade['exit_index']
+            entry_price = trade['entry_price']
+
+            for i in range(entry_idx, exit_idx + 1):
+                daily_return = (entry_price - close_prices[i]) / entry_price
+                daily_return -= self.config.transaction_cost
+                if i == exit_idx:
+                    daily_return -= self.config.transaction_cost
+
+                capital_at_entry = short_equity[entry_idx - 1] if entry_idx > 0 else self.config.initial_capital
+                short_equity[i] = capital_at_entry * (1 + daily_return)
+
+            if exit_idx + 1 < n:
+                for i in range(exit_idx + 1, n):
+                    if i < n and (not any(t['entry_index'] <= i <= t['exit_index'] for t in short_trades if t != trade)):
+                        short_equity[i] = short_equity[exit_idx]
+
+        # Fix equity curves - forward fill properly
+        long_equity = self._fix_equity_curve(long_equity, long_trades)
+        short_equity = self._fix_equity_curve(short_equity, short_trades)
+
+        # Combined equity
+        combined_equity = long_equity + short_equity - self.config.initial_capital
+
+        # Buy and hold equity
+        buy_hold_equity = (close_prices / close_prices[0]) * self.config.initial_capital
+
+        return long_equity, short_equity, combined_equity, buy_hold_equity
+
+    def _fix_equity_curve(self, equity: np.ndarray, trades: List[Dict]) -> np.ndarray:
+        """Fix equity curve with proper forward filling"""
+        result = np.full_like(equity, self.config.initial_capital)
+        current_equity = self.config.initial_capital
+
+        # Sort trades by entry index
+        sorted_trades = sorted(trades, key=lambda x: x['entry_index'])
+
+        trade_idx = 0
+        in_trade = False
+        trade_entry_equity = self.config.initial_capital
+
+        for i in range(len(equity)):
+            # Check if entering a trade
+            if trade_idx < len(sorted_trades):
+                trade = sorted_trades[trade_idx]
+                if i == trade['entry_index']:
+                    in_trade = True
+                    trade_entry_equity = current_equity
+
+                if in_trade and trade['entry_index'] <= i <= trade['exit_index']:
+                    # During trade - calculate equity
+                    pnl = trade['profit_loss'] * (i - trade['entry_index']) / max(1, trade['exit_index'] - trade['entry_index'])
+                    result[i] = trade_entry_equity * (1 + pnl)
+
+                    if i == trade['exit_index']:
+                        current_equity = trade_entry_equity * (1 + trade['profit_loss'])
+                        result[i] = current_equity
+                        in_trade = False
+                        trade_idx += 1
+                else:
+                    result[i] = current_equity
+            else:
+                result[i] = current_equity
+
+        return result
+
+    def calculate_statistics(self, trades: List[Dict], equity_curve: np.ndarray) -> Dict:
+        """Calculate comprehensive trading statistics"""
         if not trades:
-            return {
-                "Total Trades": 0,
-                "Winning Trades": 0,
-                "Losing Trades": 0,
-                "Win Rate": 0.0,
-                "Average Profit": 0.0,
-                "Average Loss": 0.0,
-                "Profit Factor": 0.0,
-                "Total Return": 0.0,
-                "Max Drawdown": 0.0,
-                "Sharpe Ratio": 0.0
-            }
-        total_trades = len(trades)
-        winning_trades = len([t for t in trades if t['profit_loss'] > 0])
-        losing_trades = len([t for t in trades if t['profit_loss'] <= 0])
+            return self._empty_statistics()
+
         profits = [t['profit_loss'] for t in trades if t['profit_loss'] > 0]
         losses = [t['profit_loss'] for t in trades if t['profit_loss'] <= 0]
+
+        total_trades = len(trades)
+        winning_trades = len(profits)
+        losing_trades = len(losses)
+
+        win_rate = winning_trades / total_trades if total_trades > 0 else 0
+
         avg_profit = np.mean(profits) if profits else 0
         avg_loss = np.mean(losses) if losses else 0
+
         total_profit = sum(profits)
-        total_loss = sum(losses)
-        win_rate = winning_trades / total_trades if total_trades > 0 else 0
-        profit_factor = abs(total_profit / total_loss) if total_loss != 0 else float('inf')
-        total_return = (equity_curve.iloc[-1] - self.initial_capital) / self.initial_capital
-        max_drawdown = abs((equity_curve - equity_curve.expanding().max()).min())
-        sharpe_ratio = np.sqrt(252) * (equity_curve.pct_change().dropna().mean() / equity_curve.pct_change().dropna().std()) if len(equity_curve.pct_change().dropna()) > 1 else 0
+        total_loss = abs(sum(losses))
+
+        profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
+
+        # Total return
+        total_return = (equity_curve[-1] - self.config.initial_capital) / self.config.initial_capital
+
+        # Max drawdown
+        rolling_max = np.maximum.accumulate(equity_curve)
+        drawdowns = (equity_curve - rolling_max) / rolling_max
+        max_drawdown = abs(np.min(drawdowns))
+
+        # Sharpe Ratio (annualized)
+        returns = np.diff(equity_curve) / equity_curve[:-1]
+        sharpe_ratio = np.sqrt(252) * (np.mean(returns) / np.std(returns)) if np.std(returns) > 0 else 0
+
+        # Sortino Ratio
+        negative_returns = returns[returns < 0]
+        sortino_ratio = np.sqrt(252) * (np.mean(returns) / np.std(negative_returns)) if len(negative_returns) > 0 and np.std(negative_returns) > 0 else 0
+
+        # Calmar Ratio
+        calmar_ratio = total_return / max_drawdown if max_drawdown > 0 else 0
+
+        # Average trade duration
+        durations = [(t['exit_index'] - t['entry_index']) for t in trades]
+        avg_duration = np.mean(durations) if durations else 0
+
+        # Expectancy
+        expectancy = (win_rate * avg_profit) - ((1 - win_rate) * abs(avg_loss))
+
         return {
             "Total Trades": total_trades,
             "Winning Trades": winning_trades,
             "Losing Trades": losing_trades,
-            "Profits": profits,
-            "Losses": losses,
-            "Avg Profit": avg_profit,
-            "Avg Loss": avg_loss,
-            "Total Profit": total_profit,
-            "Total Loss": total_loss,
-            "Win Rate": win_rate,
-            "Profit Factor": profit_factor,
-            "Total Return": total_return,
-            "Max Drawdown": max_drawdown,
-            "Sharpe Ratio": sharpe_ratio,
+            "Win Rate": f"{win_rate:.1%}",
+            "Avg Profit": f"{avg_profit:.2%}",
+            "Avg Loss": f"{avg_loss:.2%}",
+            "Profit Factor": f"{profit_factor:.2f}",
+            "Total Return": f"{total_return:.2%}",
+            "Max Drawdown": f"{max_drawdown:.2%}",
+            "Sharpe Ratio": f"{sharpe_ratio:.2f}",
+            "Sortino Ratio": f"{sortino_ratio:.2f}",
+            "Calmar Ratio": f"{calmar_ratio:.2f}",
+            "Avg Trade Duration": f"{avg_duration:.1f} days",
+            "Expectancy": f"{expectancy:.2%}",
         }
 
-    def plot_results(self, df, long_trades, short_trades, long_equity, short_equity, buy_and_hold_equity, symbol):
-        plot_df = df.iloc[15:]
-        plot_long_equity = long_equity.iloc[15:]
-        plot_short_equity = short_equity.iloc[15:]
-        plot_buy_and_hold_equity = buy_and_hold_equity.iloc[15:]
-        combined_equity = plot_long_equity + plot_short_equity - self.initial_capital
-        combined_equity = combined_equity.ffill().bfill()
-    
-        fig = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.05,
-            subplot_titles=(f'{symbol} Price and Supertrend Signals', f'{symbol} Equity Curves'),
-            row_heights=[0.6, 0.4]
-        )
+    def _empty_statistics(self) -> Dict:
+        return {
+            "Total Trades": 0,
+            "Winning Trades": 0,
+            "Losing Trades": 0,
+            "Win Rate": "0.0%",
+            "Avg Profit": "0.00%",
+            "Avg Loss": "0.00%",
+            "Profit Factor": "0.00",
+            "Total Return": "0.00%",
+            "Max Drawdown": "0.00%",
+            "Sharpe Ratio": "0.00",
+            "Sortino Ratio": "0.00",
+            "Calmar Ratio": "0.00",
+            "Avg Trade Duration": "0.0 days",
+            "Expectancy": "0.00%",
+        }
+
+
+# =============================================================================
+# PARAMETER OPTIMIZATION
+# =============================================================================
+def optimize_parameters(df: pd.DataFrame, symbol: str,
+                        period_range: range = range(7, 21, 2),
+                        multiplier_range: np.ndarray = np.arange(2.0, 5.0, 0.5),
+                        use_htf: bool = True,
+                        long_only: bool = True,
+                        filter_mode: str = "trend_following",
+                        optimize_for: str = "return") -> Tuple[int, float, Dict]:
+    """
+    Grid search for optimal Supertrend parameters
+
+    optimize_for: "return", "sharpe", "profit_factor", "win_rate"
+    """
+    print("\n" + "="*60)
+    print("PARAMETER OPTIMIZATION")
+    print("="*60)
+    print(f"Mode: {'Long Only' if long_only else 'Long & Short'}")
+    print(f"HTF Filter: {filter_mode if use_htf else 'Disabled'}")
+    print(f"Optimizing for: {optimize_for}")
+
+    close_col = f'Close_{symbol}'
+    high_col = f'High_{symbol}'
+    low_col = f'Low_{symbol}'
+
+    high = df[high_col].values
+    low = df[low_col].values
+    close = df[close_col].values
+
+    best_score = -np.inf
+    best_period = 10
+    best_multiplier = 3.0
+    best_stats = {}
+
+    results = []
+
+    config = TradingConfig(symbol=symbol)
+    system = OptimizedTradingSystem(config)
+
+    total_combinations = len(period_range) * len(multiplier_range)
+    current = 0
+
+    for period in period_range:
+        for multiplier in multiplier_range:
+            current += 1
+
+            try:
+                # Calculate Supertrend
+                supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, multiplier)
+
+                # Get HTF trend if enabled
+                htf_direction = None
+                if use_htf:
+                    htf_direction = get_htf_trend(df, symbol, period, multiplier).values
+
+                # Generate signals
+                buy_signals, sell_signals = generate_signals_vectorized(
+                    close, supertrend, direction, htf_direction, use_htf, filter_mode
+                )
+
+                # Generate trades
+                long_trades, short_trades = system.generate_trades(df, buy_signals, sell_signals, long_only)
+
+                all_trades = long_trades + short_trades
+
+                if len(all_trades) < 3:
+                    continue
+
+                # Calculate equity
+                long_eq, short_eq, combined_eq, buy_hold = system.calculate_equity_curve_vectorized(
+                    df, long_trades, short_trades
+                )
+
+                # Calculate metrics
+                total_return = (combined_eq[-1] - config.initial_capital) / config.initial_capital
+                buy_hold_return = (buy_hold[-1] - config.initial_capital) / config.initial_capital
+
+                # Sharpe Ratio
+                returns = np.diff(combined_eq) / combined_eq[:-1]
+                returns = returns[~np.isnan(returns)]
+                sharpe = np.sqrt(252) * (np.mean(returns) / np.std(returns)) if len(returns) > 0 and np.std(returns) > 0 else 0
+
+                # Win Rate
+                wins = len([t for t in all_trades if t['profit_loss'] > 0])
+                win_rate = wins / len(all_trades) if all_trades else 0
+
+                # Profit Factor
+                total_profit = sum([t['profit_loss'] for t in all_trades if t['profit_loss'] > 0])
+                total_loss = abs(sum([t['profit_loss'] for t in all_trades if t['profit_loss'] <= 0]))
+                profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
+
+                # Max Drawdown
+                rolling_max = np.maximum.accumulate(combined_eq)
+                drawdowns = (combined_eq - rolling_max) / rolling_max
+                max_dd = abs(np.min(drawdowns))
+
+                # Risk-adjusted return (Return / Max DD)
+                risk_adj_return = total_return / max_dd if max_dd > 0 else total_return
+
+                # Select score based on optimization target
+                if optimize_for == "return":
+                    score = total_return
+                elif optimize_for == "sharpe":
+                    score = sharpe
+                elif optimize_for == "profit_factor":
+                    score = profit_factor if profit_factor != float('inf') else 10
+                elif optimize_for == "win_rate":
+                    score = win_rate
+                elif optimize_for == "risk_adjusted":
+                    score = risk_adj_return
+                else:
+                    score = total_return
+
+                results.append({
+                    'period': period,
+                    'multiplier': multiplier,
+                    'sharpe': sharpe,
+                    'return': total_return,
+                    'win_rate': win_rate,
+                    'profit_factor': profit_factor,
+                    'max_dd': max_dd,
+                    'trades': len(all_trades),
+                    'score': score
+                })
+
+                # Update best if better score AND positive return AND outperforms buy & hold
+                if score > best_score and total_return > 0 and len(all_trades) >= 3:
+                    best_score = score
+                    best_period = period
+                    best_multiplier = multiplier
+                    best_stats = {
+                        'sharpe': sharpe,
+                        'return': total_return,
+                        'win_rate': win_rate,
+                        'profit_factor': profit_factor,
+                        'max_dd': max_dd,
+                        'long_trades': len(long_trades),
+                        'short_trades': len(short_trades)
+                    }
+
+            except Exception as e:
+                pass
+
+            # Progress
+            if current % 10 == 0:
+                print(f"Progress: {current}/{total_combinations} ({100*current/total_combinations:.0f}%)")
+
+    # If no positive result found, find best among all
+    if best_stats == {}:
+        print("\nNo profitable strategy found. Selecting least negative...")
+        best_result = max(results, key=lambda x: x['return']) if results else None
+        if best_result:
+            best_period = best_result['period']
+            best_multiplier = best_result['multiplier']
+            best_stats = best_result
+
+    print(f"\nBest Parameters Found:")
+    print(f"  Period: {best_period}")
+    print(f"  Multiplier: {best_multiplier}")
+    print(f"  Return: {best_stats.get('return', 0):.2%}")
+    print(f"  Win Rate: {best_stats.get('win_rate', 0):.1%}")
+    print(f"  Profit Factor: {best_stats.get('profit_factor', 0):.2f}")
+    print(f"  Max Drawdown: {best_stats.get('max_dd', 0):.2%}")
+
+    return best_period, best_multiplier, results
+
+
+# =============================================================================
+# VISUALIZATION
+# =============================================================================
+def create_visualization(df: pd.DataFrame, symbol: str, config: TradingConfig,
+                         supertrend: np.ndarray, direction: np.ndarray,
+                         htf_direction: np.ndarray,
+                         buy_signals: np.ndarray, sell_signals: np.ndarray,
+                         long_trades: List[Dict], short_trades: List[Dict],
+                         long_equity: np.ndarray, short_equity: np.ndarray,
+                         combined_equity: np.ndarray, buy_hold_equity: np.ndarray) -> go.Figure:
+    """Create comprehensive trading visualization"""
+
+    close_col = f'Close_{symbol}'
+    high_col = f'High_{symbol}'
+    low_col = f'Low_{symbol}'
+    open_col = f'Open_{symbol}'
+
+    # Skip initial period for cleaner visualization
+    skip = max(config.st_period, config.htf_period) + 10
+    plot_df = df.iloc[skip:]
+    plot_indices = np.arange(skip, len(df))
+
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=(
+            f'{symbol} Price with Supertrend & HTF Filter',
+            f'Equity Curves (Initial: ${config.initial_capital:,.0f})',
+            'HTF Trend Direction'
+        ),
+        row_heights=[0.5, 0.35, 0.15]
+    )
+
+    # Row 1: Candlestick Chart
+    fig.add_trace(
+        go.Candlestick(
+            x=plot_df.index,
+            open=plot_df[open_col],
+            high=plot_df[high_col],
+            low=plot_df[low_col],
+            close=plot_df[close_col],
+            name='Price',
+            increasing_line_color='#26a69a',
+            decreasing_line_color='#ef5350'
+        ),
+        row=1, col=1
+    )
+
+    # Supertrend line with color based on direction
+    for i in range(len(plot_df) - 1):
+        idx = skip + i
+        color = '#26a69a' if direction[idx] == 1 else '#ef5350'
         fig.add_trace(
-            go.Candlestick(
-                x=plot_df.index,
-                open=plot_df[f'Open_{symbol}'],
-                high=plot_df[f'High_{symbol}'],
-                low=plot_df[f'Low_{symbol}'],
-                close=plot_df[f'Close_{symbol}'],
-                name='Candlestick'
+            go.Scatter(
+                x=[plot_df.index[i], plot_df.index[i+1]],
+                y=[supertrend[idx], supertrend[idx+1]],
+                mode='lines',
+                line=dict(color=color, width=2),
+                showlegend=False,
+                hoverinfo='skip'
             ),
             row=1, col=1
         )
-        
-        # Add Supertrend to the plot with changing colors
-        for start, end in zip(df.index[:-1], df.index[1:]):
-            color = 'green' if df[f'Close_{symbol}'][start] > df['Supertrend'][start] else 'red'
-            fig.add_trace(
-                go.Scatter(
-                    x=[start, end],
-                    y=[df['Supertrend'][start], df['Supertrend'][end]],
-                    mode='lines',
-                    line=dict(color=color, width=2),
-                    showlegend=False
-                ),
-                row=1, col=1
-            )
-    
-        # Add buy and sell signals to the plot
+
+    # Buy signals
+    buy_dates = plot_df.index[buy_signals[skip:]]
+    buy_prices = plot_df[close_col].values[buy_signals[skip:]]
+    if len(buy_dates) > 0:
         fig.add_trace(
             go.Scatter(
-                x=df.index,
-                y=df['Buy_Signal_Price'],
+                x=buy_dates,
+                y=buy_prices,
                 mode='markers',
                 name='Buy Signal',
-                marker=dict(color='green', symbol='triangle-up', size=10)
+                marker=dict(symbol='triangle-up', size=15, color='#26a69a',
+                           line=dict(width=2, color='white'))
             ),
             row=1, col=1
         )
+
+    # Sell signals
+    sell_dates = plot_df.index[sell_signals[skip:]]
+    sell_prices = plot_df[close_col].values[sell_signals[skip:]]
+    if len(sell_dates) > 0:
         fig.add_trace(
             go.Scatter(
-                x=df.index,
-                y=df['Sell_Signal_Price'],
+                x=sell_dates,
+                y=sell_prices,
                 mode='markers',
                 name='Sell Signal',
-                marker=dict(color='red', symbol='triangle-down', size=10)
+                marker=dict(symbol='triangle-down', size=15, color='#ef5350',
+                           line=dict(width=2, color='white'))
             ),
             row=1, col=1
         )
-    
-        # Add long trade markers
-        if long_trades:
-            long_entries = [trade['entry_date'] for trade in long_trades if trade['entry_date'] >= plot_df.index[0]]
-            long_entry_prices = [trade['entry_price'] for trade in long_trades if trade['entry_date'] >= plot_df.index[0]]
-            long_exits = [trade['exit_date'] for trade in long_trades if trade['exit_date'] >= plot_df.index[0]]
-            long_exit_prices = [trade['exit_price'] for trade in long_trades if trade['exit_date'] >= plot_df.index[0]]
-            fig.add_trace(
-                go.Scatter(
-                    x=long_entries,
-                    y=[price + 0.5 for price in long_entry_prices],
-                    mode='markers',
-                    name='Long Entry',
-                    marker=dict(symbol='triangle-up', size=10, color='green')
-                ),
-                row=1, col=1
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=long_exits,
-                    y=[price + 0.5 for price in long_exit_prices],
-                    mode='markers',
-                    name='Long Exit',
-                    marker=dict(symbol='triangle-down', size=10, color='red')
-                ),
-                row=1, col=1
-            )
-    
-        # Add short trade markers
-        if short_trades:
-            short_entries = [trade['entry_date'] for trade in short_trades if trade['entry_date'] >= plot_df.index[0]]
-            short_entry_prices = [trade['entry_price'] for trade in short_trades if trade['entry_date'] >= plot_df.index[0]]
-            short_exits = [trade['exit_date'] for trade in short_trades if trade['exit_date'] >= plot_df.index[0]]
-            short_exit_prices = [trade['exit_price'] for trade in short_trades if trade['exit_date'] >= plot_df.index[0]]
-            fig.add_trace(
-                go.Scatter(
-                    x=short_entries,
-                    y=[price - 0.5 for price in short_entry_prices],
-                    mode='markers',
-                    name='Short Entry',
-                    marker=dict(symbol='triangle-down', size=10, color='blue')
-                ),
-                row=1, col=1
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=short_exits,
-                    y=[price - 0.5 for price in short_exit_prices],
-                    mode='markers',
-                    name='Short Exit',
-                    marker=dict(symbol='triangle-up', size=10, color='black')
-                ),
-                row=1, col=1
-            )
-    
-        # Add equity curves to the plot
-        fig.add_trace(
-            go.Scatter(
-                x=plot_long_equity.index,
-                y=plot_long_equity.values,
-                mode='lines',
-                name='Long Equity',
-                line=dict(color='green', width=2)
-            ),
-            row=2, col=1
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=plot_short_equity.index,
-                y=plot_short_equity.values,
-                mode='lines',
-                name='Short Equity',
-                line=dict(color='red', width=2)
-            ),
-            row=2, col=1
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=combined_equity.index,
-                y=combined_equity.values,
-                mode='lines',
-                name='Combined Equity',
-                line=dict(color='blue', width=2)
-            ),
-            row=2, col=1
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=plot_buy_and_hold_equity.index,
-                y=plot_buy_and_hold_equity.values,
-                mode='lines',
-                name='Buy and Hold Equity',
-                line=dict(color='orange', width=2, dash='dash')
-            ),
-            row=2, col=1
-        )
-    
-        fig.update_layout(
-            title=f'Trading System Results for {symbol}',
-            xaxis=dict(rangeslider=dict(visible=False)),
-            yaxis_title='Price',
-            yaxis2_title='Equity',
-            height=1000,
-            showlegend=True,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-        )
-        price_min = plot_df[f'Low_{symbol}'].min()
-        price_max = plot_df[f'High_{symbol}'].max()
-        equity_min = min(plot_long_equity.min(), plot_short_equity.min(), combined_equity.min(), plot_buy_and_hold_equity.min())
-        equity_max = max(plot_long_equity.max(), plot_short_equity.max(), combined_equity.max(), plot_buy_and_hold_equity.max())
-        fig.update_yaxes(range=[price_min * 0.95, price_max * 1.05], row=1, col=1)
-        fig.update_yaxes(range=[equity_min * 1.1 if equity_min < 0 else equity_min * 0.9, equity_max * 1.1], row=2, col=1)  # Adjusted to cover negative values
-    
-        return fig
+
+    # Row 2: Equity Curves
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=long_equity[skip:],
+            mode='lines',
+            name='Long Equity',
+            line=dict(color='#26a69a', width=2)
+        ),
+        row=2, col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=short_equity[skip:],
+            mode='lines',
+            name='Short Equity',
+            line=dict(color='#ef5350', width=2)
+        ),
+        row=2, col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=combined_equity[skip:],
+            mode='lines',
+            name='Combined Strategy',
+            line=dict(color='#7c4dff', width=3)
+        ),
+        row=2, col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=buy_hold_equity[skip:],
+            mode='lines',
+            name='Buy & Hold',
+            line=dict(color='#ffa726', width=2, dash='dash')
+        ),
+        row=2, col=1
+    )
+
+    # Row 3: HTF Direction
+    htf_colors = ['#ef5350' if d == -1 else '#26a69a' for d in htf_direction[skip:]]
+    fig.add_trace(
+        go.Bar(
+            x=plot_df.index,
+            y=htf_direction[skip:],
+            name='HTF Trend',
+            marker_color=htf_colors
+        ),
+        row=3, col=1
+    )
+
+    # Layout
+    fig.update_layout(
+        title=dict(
+            text=f'<b>{symbol} Supertrend Trading System with HTF Filter</b><br>'
+                 f'<sup>Period: {config.st_period} | Multiplier: {config.st_multiplier} | HTF Filter: {"ON" if config.use_htf_filter else "OFF"}</sup>',
+            x=0.5,
+            font=dict(size=20)
+        ),
+        height=1000,
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=1.02,
+            bgcolor='rgba(255,255,255,0.8)'
+        ),
+        xaxis_rangeslider_visible=False,
+        template='plotly_white',
+        hovermode='x unified'
+    )
+
+    fig.update_yaxes(title_text="Price ($)", row=1, col=1)
+    fig.update_yaxes(title_text="Equity ($)", row=2, col=1)
+    fig.update_yaxes(title_text="HTF Trend", row=3, col=1, tickvals=[-1, 0, 1], ticktext=['Bearish', 'Neutral', 'Bullish'])
+
+    return fig
 
 
-    def _add_equity_curve(self, fig, equity_curve, name, color, row, col):
-        fig.add_trace(
-            go.Scatter(
-                x=equity_curve.index,
-                y=equity_curve.values,
-                name=name,
-                line=dict(color=color)
-            ),
-            row=row, col=col
-        )
-    def print_statistics(self, stats, trade_type=""):
-        print(f"\n{trade_type} Trading Statistics:")
-        print("=" * 50)
-        excluded_keys = ["Daily Returns", "Rolling Max", "Drawdown"]
-        for key, value in stats.items():
-            if key in excluded_keys:
-                continue
-            if isinstance(value, float):
-                print(f"{key}: {value:.2f}")
-            elif isinstance(value, list):
-                formatted_list = ', '.join(f"{v:.2f}" if isinstance(v, float) else str(v) for v in value)
-                print(f"{key}: {formatted_list}")
-            elif isinstance(value, pd.Series):
-                formatted_series = value.to_string()
-                print(f"{key}:\n{formatted_series}")
-            else:
-                print(f"{key}: {value}")
-    
+# =============================================================================
+# MULTI-STRATEGY COMPARISON
+# =============================================================================
+def run_strategy_comparison(df: pd.DataFrame, symbol: str, config: TradingConfig):
+    """Test multiple strategy configurations and find the best one"""
+    print("\n" + "="*60)
+    print("MULTI-STRATEGY COMPARISON")
+    print("="*60)
+
+    close_col = f'Close_{symbol}'
+    high_col = f'High_{symbol}'
+    low_col = f'Low_{symbol}'
+
+    high = df[high_col].values
+    low = df[low_col].values
+    close = df[close_col].values
+
+    strategies = [
+        {"name": "Pure Supertrend (No Filter)", "use_htf": False, "long_only": False, "filter_mode": "exit_only"},
+        {"name": "Long Only (No Filter)", "use_htf": False, "long_only": True, "filter_mode": "exit_only"},
+        {"name": "HTF Trend Following (Long)", "use_htf": True, "long_only": True, "filter_mode": "trend_following"},
+        {"name": "HTF Confirmation", "use_htf": True, "long_only": False, "filter_mode": "confirmation"},
+    ]
+
+    results = []
+    system = OptimizedTradingSystem(config)
+
+    # Test different periods and multipliers for each strategy
+    period_range = range(7, 21, 3)
+    multiplier_range = np.arange(2.0, 4.5, 0.5)
+
+    for strat in strategies:
+        print(f"\nTesting: {strat['name']}...")
+
+        best_return = -np.inf
+        best_config = None
+
+        for period in period_range:
+            for multiplier in multiplier_range:
+                try:
+                    supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, multiplier)
+
+                    htf_direction = None
+                    if strat['use_htf']:
+                        htf_direction = get_htf_trend(df, symbol, period, multiplier).values
+
+                    buy_signals, sell_signals = generate_signals_vectorized(
+                        close, supertrend, direction, htf_direction, strat['use_htf'], strat['filter_mode']
+                    )
+
+                    long_trades, short_trades = system.generate_trades(df, buy_signals, sell_signals, strat['long_only'])
+
+                    if len(long_trades) + len(short_trades) < 3:
+                        continue
+
+                    _, _, combined_eq, buy_hold = system.calculate_equity_curve_vectorized(
+                        df, long_trades, short_trades
+                    )
+
+                    total_return = (combined_eq[-1] - config.initial_capital) / config.initial_capital
+
+                    if total_return > best_return:
+                        best_return = total_return
+                        best_config = {
+                            'period': period,
+                            'multiplier': multiplier,
+                            'return': total_return,
+                            'trades': len(long_trades) + len(short_trades)
+                        }
+
+                except Exception:
+                    pass
+
+        if best_config:
+            results.append({
+                'strategy': strat['name'],
+                'use_htf': strat['use_htf'],
+                'long_only': strat['long_only'],
+                'filter_mode': strat['filter_mode'],
+                **best_config
+            })
+            print(f"  Best: Period={best_config['period']}, Mult={best_config['multiplier']:.1f}, Return={best_config['return']:.2%}")
+
+    # Sort by return
+    results.sort(key=lambda x: x['return'], reverse=True)
+
+    print("\n" + "-"*60)
+    print("STRATEGY COMPARISON RESULTS (sorted by return)")
+    print("-"*60)
+
+    for i, r in enumerate(results, 1):
+        print(f"{i}. {r['strategy']}")
+        print(f"   Return: {r['return']:.2%} | Period: {r['period']} | Mult: {r['multiplier']:.1f} | Trades: {r['trades']}")
+
+    return results[0] if results else None
+
+
+# =============================================================================
+# MAIN FUNCTION
+# =============================================================================
 def main():
-    stock_symbol = "HON"
-    system = TradingSystem()
-    print(stock_symbol)
+    print("="*60)
+    print("SUPERTREND TRADING SYSTEM v5.0 - OPTIMIZED WITH HTF FILTER")
+    print("="*60)
+
+    # Configuration
+    config = TradingConfig(
+        symbol="MSFT",
+        initial_capital=10000.0,
+        days_back=730,
+        use_htf_filter=True
+    )
+
+    # Strategy settings - these will be overridden by the best strategy found
+    LONG_ONLY = True  # Only long trades (better for bullish markets like MSFT)
+    FILTER_MODE = "trend_following"  # trend_following, confirmation, exit_only
+    OPTIMIZE_FOR = "return"  # return, sharpe, profit_factor, win_rate, risk_adjusted
+    COMPARE_STRATEGIES = True  # Run multi-strategy comparison first
+
+    print(f"\nSymbol: {config.symbol}")
+    print(f"Initial Capital: ${config.initial_capital:,.2f}")
+    print(f"Backtest Period: {config.days_back} days")
+
+    # Download Data
+    print(f"\nDownloading {config.symbol} data...")
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
-    stock_data = yf.download(stock_symbol, start=start_date, end=end_date)
-    print("Available columns in stock_data:")
-    print(stock_data.columns)
-    
-    # Flatten the DataFrame to handle MultiIndex columns
-    stock_data = flatten_dataframe(stock_data)
-    
-    close_col = f'Close_{stock_symbol}'
-    high_col = f'High_{stock_symbol}'
-    low_col = f'Low_{stock_symbol}'
-    
-    if 'TrendUp' not in stock_data.columns:
-        try:
-            stock_data['ShortMA'] = stock_data[close_col].rolling(window=20).mean()
-            stock_data['LongMA'] = stock_data[close_col].rolling(window=50).mean()
-            stock_data['TrendUp'] = stock_data['ShortMA'] > stock_data['LongMA']
-            stock_data['TrendUp'] = stock_data['TrendUp'].fillna(False)
-            print("TrendUp column created successfully")
-        except Exception as e:
-            print(f"Error creating TrendUp column: {e}")
-            print("Available columns:", stock_data.columns)
-            
-    if 'TrendDown' not in stock_data.columns:
-        stock_data['TrendDown'] = ~stock_data['TrendUp']
+    start_date = end_date - timedelta(days=config.days_back)
 
-    # Calculate Supertrend
-    st, s_upt, st_dt = get_supertrend(stock_data[high_col], stock_data[low_col], stock_data[close_col], 7, 3)
-    stock_data['Supertrend'] = st
-    stock_data['SupertrendUp'] = s_upt
-    stock_data['SupertrendDown'] = st_dt
+    stock_data = yf.download(config.symbol, start=start_date, end=end_date, progress=False)
 
-    # Implement the Supertrend trading strategy
-    buy_price, sell_price, st_signal = implement_st_strategy(stock_data[close_col], stock_data['Supertrend'])
-    stock_data['Buy_Signal_Price'] = buy_price
-    stock_data['Sell_Signal_Price'] = sell_price
-    stock_data['ST_Signal'] = st_signal
-    
-    long_trades, short_trades = system.generate_trading_lists(stock_data, stock_symbol)
-    
-    # Calculate equity curves based on Supertrend trades
-    long_equity = system.calculate_equity_curve(stock_data, long_trades)
-    short_equity = system.calculate_equity_curve(stock_data, short_trades)
-    
-    # Calculate buy and hold equity
-    buy_and_hold_equity = (stock_data[close_col] / stock_data[close_col].iloc[0]) * system.initial_capital
-    
-    print("Long Trades:")
-    print(pd.DataFrame(long_trades).to_string(index=False))
-    print("\nShort Trades:")
-    print(pd.DataFrame(short_trades).to_string(index=False))
-    
-    long_stats = system.calculate_trade_statistics(long_trades, long_equity)
-    short_stats = system.calculate_trade_statistics(short_trades, short_equity)
-    system.print_statistics(long_stats, "Long")
-    system.print_statistics(short_stats, "Short")
-    
-    print("Candlestick Data for Plot:")
-    stock_data_flat = flatten_dataframe(stock_data)  # Ensure DataFrame is flattened for plotting
-    fig = system.plot_results(stock_data_flat, long_trades, short_trades, long_equity, short_equity, buy_and_hold_equity, stock_symbol)
-    
-    fig.show()
-    print("Stock Data Null Values:", stock_data.isnull().sum())
-    print("Candlestick Chart Data:")
+    if stock_data.empty:
+        print("Error: No data downloaded")
+        return
+
+    # Flatten MultiIndex columns
+    if isinstance(stock_data.columns, pd.MultiIndex):
+        stock_data.columns = ['_'.join(col).strip() for col in stock_data.columns.values]
+    else:
+        # Rename columns to include symbol
+        stock_data.columns = [f'{col}_{config.symbol}' for col in stock_data.columns]
+
+    print(f"Data loaded: {len(stock_data)} trading days")
+    print(f"Date range: {stock_data.index[0].strftime('%Y-%m-%d')} to {stock_data.index[-1].strftime('%Y-%m-%d')}")
+
+    # Column names
+    close_col = f'Close_{config.symbol}'
+    high_col = f'High_{config.symbol}'
+    low_col = f'Low_{config.symbol}'
+
+    high = stock_data[high_col].values
+    low = stock_data[low_col].values
+    close = stock_data[close_col].values
+
+    # Run multi-strategy comparison first
+    if COMPARE_STRATEGIES:
+        best_strat = run_strategy_comparison(stock_data, config.symbol, config)
+        if best_strat:
+            LONG_ONLY = best_strat['long_only']
+            FILTER_MODE = best_strat['filter_mode']
+            config.use_htf_filter = best_strat['use_htf']
+            config.st_period = best_strat['period']
+            config.st_multiplier = best_strat['multiplier']
+            config.htf_period = best_strat['period']
+            config.htf_multiplier = best_strat['multiplier']
+            print(f"\n>>> Using best strategy: {best_strat['strategy']}")
+    else:
+        # Parameter Optimization for single strategy
+        print("\n" + "-"*60)
+        best_period, best_multiplier, optimization_results = optimize_parameters(
+            stock_data, config.symbol,
+            period_range=range(7, 21, 2),
+            multiplier_range=np.arange(2.0, 5.0, 0.5),
+            use_htf=config.use_htf_filter,
+            long_only=LONG_ONLY,
+            filter_mode=FILTER_MODE,
+            optimize_for=OPTIMIZE_FOR
+        )
+        config.st_period = best_period
+        config.st_multiplier = best_multiplier
+        config.htf_period = best_period
+        config.htf_multiplier = best_multiplier
+
+    print("\n" + "-"*60)
+    print("RUNNING BACKTEST WITH OPTIMIZED PARAMETERS")
+    print("-"*60)
+    print(f"HTF Filter: {'Enabled' if config.use_htf_filter else 'Disabled'}")
+    print(f"Mode: {'Long Only' if LONG_ONLY else 'Long & Short'}")
+    print(f"Filter Mode: {FILTER_MODE}")
+    print(f"Period: {config.st_period} | Multiplier: {config.st_multiplier}")
+
+    # Calculate Supertrend with best parameters
+    supertrend, direction, atr = calculate_supertrend_vectorized(
+        high, low, close, config.st_period, config.st_multiplier
+    )
+
+    # Calculate HTF Trend
+    htf_direction = get_htf_trend(
+        stock_data, config.symbol, config.htf_period, config.htf_multiplier
+    ).values
+
+    # Generate Signals
+    buy_signals, sell_signals = generate_signals_vectorized(
+        close, supertrend, direction, htf_direction, config.use_htf_filter, FILTER_MODE
+    )
+
+    # Initialize Trading System
+    system = OptimizedTradingSystem(config)
+
+    # Generate Trades
+    long_trades, short_trades = system.generate_trades(stock_data, buy_signals, sell_signals, LONG_ONLY)
+
+    # Calculate Equity Curves
+    long_equity, short_equity, combined_equity, buy_hold_equity = system.calculate_equity_curve_vectorized(
+        stock_data, long_trades, short_trades
+    )
+
+    # Print Trade Details
+    print(f"\n{'='*60}")
+    print("TRADE DETAILS")
+    print("="*60)
+
+    if long_trades:
+        print(f"\nLONG TRADES ({len(long_trades)} total):")
+        print("-"*40)
+        for i, trade in enumerate(long_trades, 1):
+            print(f"  {i}. Entry: {trade['entry_date'].strftime('%Y-%m-%d')} @ ${trade['entry_price']:.2f}")
+            print(f"     Exit:  {trade['exit_date'].strftime('%Y-%m-%d')} @ ${trade['exit_price']:.2f}")
+            print(f"     P/L:   {trade['profit_loss']:.2%}")
+    else:
+        print("\nNo long trades executed")
+
+    if short_trades:
+        print(f"\nSHORT TRADES ({len(short_trades)} total):")
+        print("-"*40)
+        for i, trade in enumerate(short_trades, 1):
+            print(f"  {i}. Entry: {trade['entry_date'].strftime('%Y-%m-%d')} @ ${trade['entry_price']:.2f}")
+            print(f"     Exit:  {trade['exit_date'].strftime('%Y-%m-%d')} @ ${trade['exit_price']:.2f}")
+            print(f"     P/L:   {trade['profit_loss']:.2%}")
+    else:
+        print("\nNo short trades executed")
+
+    # Calculate Statistics
+    print(f"\n{'='*60}")
+    print("PERFORMANCE STATISTICS")
+    print("="*60)
+
+    long_stats = system.calculate_statistics(long_trades, long_equity)
+    short_stats = system.calculate_statistics(short_trades, short_equity)
+    all_trades = long_trades + short_trades
+    combined_stats = system.calculate_statistics(all_trades, combined_equity)
+
+    print("\n--- LONG TRADES ---")
+    for key, value in long_stats.items():
+        print(f"  {key}: {value}")
+
+    print("\n--- SHORT TRADES ---")
+    for key, value in short_stats.items():
+        print(f"  {key}: {value}")
+
+    print("\n--- COMBINED STRATEGY ---")
+    for key, value in combined_stats.items():
+        print(f"  {key}: {value}")
+
+    # Buy & Hold comparison
+    buy_hold_return = (buy_hold_equity[-1] - config.initial_capital) / config.initial_capital
+    strategy_return = (combined_equity[-1] - config.initial_capital) / config.initial_capital
+
+    print(f"\n{'='*60}")
+    print("STRATEGY vs BUY & HOLD")
+    print("="*60)
+    print(f"  Strategy Return:   {strategy_return:.2%}")
+    print(f"  Buy & Hold Return: {buy_hold_return:.2%}")
+    print(f"  Outperformance:    {strategy_return - buy_hold_return:.2%}")
+    print(f"  Final Equity:      ${combined_equity[-1]:,.2f}")
+
+    # Create Visualization
+    print(f"\n{'='*60}")
+    print("GENERATING VISUALIZATION...")
+    print("="*60)
+
+    fig = create_visualization(
+        stock_data, config.symbol, config,
+        supertrend, direction, htf_direction,
+        buy_signals, sell_signals,
+        long_trades, short_trades,
+        long_equity, short_equity, combined_equity, buy_hold_equity
+    )
+
+    # Save to HTML
+    output_file = f"supertrend_{config.symbol}_results.html"
+    fig.write_html(output_file)
+    print(f"\nResults saved to: {output_file}")
+
+    # Try to show plot (may fail in headless environments)
     try:
-        print(stock_data[[f'Open_{stock_symbol}', f'High_{stock_symbol}', f'Low_{stock_symbol}', f'Close_{stock_symbol}']].dropna().head())
-    except KeyError:
-        try:
-            print(stock_data[['Open_BTC-EUR', 'High_BTC-EUR', 'Low_BTC-EUR', 'Close_BTC-EUR']].dropna().head())
-        except KeyError:
-            print("Could not access OHLC columns - see available columns above")
+        import plotly.io as pio
+        pio.renderers.default = 'browser'
+        fig.show()
+    except Exception as e:
+        print(f"Could not open browser (headless environment). View the HTML file instead.")
 
-import plotly.io as pio
-pio.renderers.default = 'browser'
+    print("\n" + "="*60)
+    print("BACKTEST COMPLETE")
+    print("="*60)
+
+    return {
+        'config': config,
+        'long_trades': long_trades,
+        'short_trades': short_trades,
+        'combined_equity': combined_equity,
+        'buy_hold_equity': buy_hold_equity
+    }
+
 
 if __name__ == "__main__":
     main()
-
