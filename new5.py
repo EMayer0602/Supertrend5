@@ -58,6 +58,32 @@ def calculate_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: 
     return atr
 
 
+def calculate_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Calculate RSI (Relative Strength Index) using vectorized operations"""
+    deltas = np.diff(close)
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+
+    # Calculate average gain/loss using EMA
+    avg_gain = np.zeros(len(close))
+    avg_loss = np.zeros(len(close))
+
+    # Initial SMA
+    avg_gain[period] = np.mean(gains[:period])
+    avg_loss[period] = np.mean(losses[:period])
+
+    # EMA for subsequent values
+    for i in range(period + 1, len(close)):
+        avg_gain[i] = (avg_gain[i-1] * (period - 1) + gains[i-1]) / period
+        avg_loss[i] = (avg_loss[i-1] * (period - 1) + losses[i-1]) / period
+
+    rs = np.where(avg_loss != 0, avg_gain / avg_loss, 100)
+    rsi = 100 - (100 / (1 + rs))
+    rsi[:period] = 50  # Neutral for initial period
+
+    return rsi
+
+
 def calculate_supertrend_vectorized(high: np.ndarray, low: np.ndarray, close: np.ndarray,
                                      period: int = 10, multiplier: float = 3.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -226,14 +252,22 @@ class OptimizedTradingSystem:
         self.config = config
 
     def generate_trades(self, df: pd.DataFrame, buy_signals: np.ndarray,
-                        sell_signals: np.ndarray, long_only: bool = False) -> Tuple[List[Dict], List[Dict]]:
-        """Generate trade lists from signals
+                        sell_signals: np.ndarray, long_only: bool = False,
+                        use_trailing_stop: bool = False, trailing_stop_pct: float = 0.05,
+                        rsi: Optional[np.ndarray] = None, rsi_oversold: int = 30, rsi_overbought: int = 70) -> Tuple[List[Dict], List[Dict]]:
+        """Generate trade lists from signals with optional trailing stop and RSI filter
 
         Args:
             long_only: If True, only generate long trades (no shorts)
+            use_trailing_stop: If True, use trailing stop to lock in profits
+            trailing_stop_pct: Trailing stop percentage (e.g., 0.05 = 5%)
+            rsi: RSI values array (optional)
+            rsi_oversold: RSI level considered oversold (buy opportunity)
+            rsi_overbought: RSI level considered overbought (sell opportunity)
         """
         symbol = self.config.symbol
         close_col = f'Close_{symbol}'
+        high_col = f'High_{symbol}'
 
         long_trades = []
         short_trades = []
@@ -242,12 +276,46 @@ class OptimizedTradingSystem:
         entry_price = 0
         entry_date = None
         entry_idx = 0
+        highest_since_entry = 0  # For trailing stop
 
         close_prices = df[close_col].values
+        high_prices = df[high_col].values
         dates = df.index
 
         for i in range(len(df)):
-            if buy_signals[i]:
+            # Check trailing stop first (if in position)
+            if use_trailing_stop and position == 'long':
+                highest_since_entry = max(highest_since_entry, high_prices[i])
+                trailing_stop_price = highest_since_entry * (1 - trailing_stop_pct)
+
+                if close_prices[i] < trailing_stop_price:
+                    # Trailing stop hit - exit position
+                    profit_loss = (close_prices[i] - entry_price) / entry_price
+                    profit_loss -= self.config.transaction_cost * 2
+                    long_trades.append({
+                        'entry_date': entry_date,
+                        'entry_price': entry_price,
+                        'exit_date': dates[i],
+                        'exit_price': close_prices[i],
+                        'profit_loss': profit_loss,
+                        'entry_index': entry_idx,
+                        'exit_index': i,
+                        'exit_reason': 'trailing_stop'
+                    })
+                    position = None
+                    highest_since_entry = 0
+                    continue
+
+            # RSI filter for entry
+            rsi_allows_buy = True
+            rsi_allows_sell = True
+            if rsi is not None:
+                # Only buy if RSI is not overbought (gives room to grow)
+                rsi_allows_buy = rsi[i] < rsi_overbought
+                # Only sell/short if RSI is not oversold (might bounce)
+                rsi_allows_sell = rsi[i] > rsi_oversold
+
+            if buy_signals[i] and rsi_allows_buy:
                 # Close short position if exists
                 if position == 'short':
                     profit_loss = (entry_price - close_prices[i]) / entry_price
@@ -259,7 +327,8 @@ class OptimizedTradingSystem:
                         'exit_price': close_prices[i],
                         'profit_loss': profit_loss,
                         'entry_index': entry_idx,
-                        'exit_index': i
+                        'exit_index': i,
+                        'exit_reason': 'signal'
                     })
                     position = None
 
@@ -269,8 +338,9 @@ class OptimizedTradingSystem:
                     entry_price = close_prices[i]
                     entry_date = dates[i]
                     entry_idx = i
+                    highest_since_entry = high_prices[i]
 
-            elif sell_signals[i]:
+            elif sell_signals[i] and rsi_allows_sell:
                 # Close long position if exists
                 if position == 'long':
                     profit_loss = (close_prices[i] - entry_price) / entry_price
@@ -282,9 +352,11 @@ class OptimizedTradingSystem:
                         'exit_price': close_prices[i],
                         'profit_loss': profit_loss,
                         'entry_index': entry_idx,
-                        'exit_index': i
+                        'exit_index': i,
+                        'exit_reason': 'signal'
                     })
                     position = None
+                    highest_since_entry = 0
 
                 # Open short position only if not long_only mode
                 if not long_only and position is None:
@@ -840,7 +912,7 @@ def create_visualization(df: pd.DataFrame, symbol: str, config: TradingConfig,
 def run_strategy_comparison(df: pd.DataFrame, symbol: str, config: TradingConfig):
     """Test multiple strategy configurations and find the best one"""
     print("\n" + "="*60)
-    print("MULTI-STRATEGY COMPARISON")
+    print("ADVANCED MULTI-STRATEGY COMPARISON")
     print("="*60)
 
     close_col = f'Close_{symbol}'
@@ -851,22 +923,52 @@ def run_strategy_comparison(df: pd.DataFrame, symbol: str, config: TradingConfig
     low = df[low_col].values
     close = df[close_col].values
 
+    # Calculate RSI once
+    rsi = calculate_rsi(close, 14)
+
+    # Calculate buy & hold return for comparison
+    buy_hold_return = (close[-1] - close[0]) / close[0]
+    print(f"\nBuy & Hold Return: {buy_hold_return:.2%}")
+    print("Target: Beat this!\n")
+
+    # Extended strategies - focus on catching big moves
     strategies = [
-        {"name": "Pure Supertrend (No Filter)", "use_htf": False, "long_only": False, "filter_mode": "exit_only"},
-        {"name": "Long Only (No Filter)", "use_htf": False, "long_only": True, "filter_mode": "exit_only"},
-        {"name": "HTF Trend Following (Long)", "use_htf": True, "long_only": True, "filter_mode": "trend_following"},
-        {"name": "HTF Confirmation", "use_htf": True, "long_only": False, "filter_mode": "confirmation"},
+        # Basic strategies
+        {"name": "Long Only (Basic)", "use_htf": False, "long_only": True, "filter_mode": "exit_only",
+         "use_trailing": False, "trailing_pct": 0, "use_rsi": False},
+
+        # With Trailing Stop - various levels
+        {"name": "Long + Trailing 5%", "use_htf": False, "long_only": True, "filter_mode": "exit_only",
+         "use_trailing": True, "trailing_pct": 0.05, "use_rsi": False},
+        {"name": "Long + Trailing 12%", "use_htf": False, "long_only": True, "filter_mode": "exit_only",
+         "use_trailing": True, "trailing_pct": 0.12, "use_rsi": False},
+        {"name": "Long + Trailing 15%", "use_htf": False, "long_only": True, "filter_mode": "exit_only",
+         "use_trailing": True, "trailing_pct": 0.15, "use_rsi": False},
+
+        # With RSI Filter - buy oversold
+        {"name": "Long + RSI Filter", "use_htf": False, "long_only": True, "filter_mode": "exit_only",
+         "use_trailing": False, "trailing_pct": 0, "use_rsi": True},
+
+        # Combined: RSI + wider Trailing
+        {"name": "Long + RSI + Trail 12%", "use_htf": False, "long_only": True, "filter_mode": "exit_only",
+         "use_trailing": True, "trailing_pct": 0.12, "use_rsi": True},
+
+        # HTF strategies
+        {"name": "HTF Long Only", "use_htf": True, "long_only": True, "filter_mode": "trend_following",
+         "use_trailing": False, "trailing_pct": 0, "use_rsi": False},
+        {"name": "HTF + Trail 15%", "use_htf": True, "long_only": True, "filter_mode": "trend_following",
+         "use_trailing": True, "trailing_pct": 0.15, "use_rsi": False},
     ]
 
     results = []
     system = OptimizedTradingSystem(config)
 
-    # Test different periods and multipliers for each strategy
-    period_range = range(7, 21, 3)
-    multiplier_range = np.arange(2.0, 4.5, 0.5)
+    # Extended parameter search - very fine tuning
+    period_range = range(5, 35, 1)  # Finer steps
+    multiplier_range = np.arange(1.5, 8.0, 0.25)  # Finer multiplier steps
 
     for strat in strategies:
-        print(f"\nTesting: {strat['name']}...")
+        print(f"Testing: {strat['name']}...")
 
         best_return = -np.inf
         best_config = None
@@ -884,12 +986,21 @@ def run_strategy_comparison(df: pd.DataFrame, symbol: str, config: TradingConfig
                         close, supertrend, direction, htf_direction, strat['use_htf'], strat['filter_mode']
                     )
 
-                    long_trades, short_trades = system.generate_trades(df, buy_signals, sell_signals, strat['long_only'])
+                    # Use RSI if enabled
+                    rsi_arr = rsi if strat['use_rsi'] else None
 
-                    if len(long_trades) + len(short_trades) < 3:
+                    long_trades, short_trades = system.generate_trades(
+                        df, buy_signals, sell_signals,
+                        long_only=strat['long_only'],
+                        use_trailing_stop=strat['use_trailing'],
+                        trailing_stop_pct=strat['trailing_pct'],
+                        rsi=rsi_arr
+                    )
+
+                    if len(long_trades) + len(short_trades) < 2:
                         continue
 
-                    _, _, combined_eq, buy_hold = system.calculate_equity_curve_vectorized(
+                    _, _, combined_eq, _ = system.calculate_equity_curve_vectorized(
                         df, long_trades, short_trades
                     )
 
@@ -901,7 +1012,8 @@ def run_strategy_comparison(df: pd.DataFrame, symbol: str, config: TradingConfig
                             'period': period,
                             'multiplier': multiplier,
                             'return': total_return,
-                            'trades': len(long_trades) + len(short_trades)
+                            'trades': len(long_trades) + len(short_trades),
+                            'vs_buyhold': total_return - buy_hold_return
                         }
 
                 except Exception:
@@ -913,22 +1025,36 @@ def run_strategy_comparison(df: pd.DataFrame, symbol: str, config: TradingConfig
                 'use_htf': strat['use_htf'],
                 'long_only': strat['long_only'],
                 'filter_mode': strat['filter_mode'],
+                'use_trailing': strat['use_trailing'],
+                'trailing_pct': strat['trailing_pct'],
+                'use_rsi': strat['use_rsi'],
                 **best_config
             })
-            print(f"  Best: Period={best_config['period']}, Mult={best_config['multiplier']:.1f}, Return={best_config['return']:.2%}")
+            beat_marker = "✓ BEATS" if best_config['return'] > buy_hold_return else "✗"
+            print(f"  Best: P={best_config['period']}, M={best_config['multiplier']:.1f}, Ret={best_config['return']:.2%} {beat_marker}")
 
     # Sort by return
     results.sort(key=lambda x: x['return'], reverse=True)
 
-    print("\n" + "-"*60)
+    print("\n" + "="*60)
     print("STRATEGY COMPARISON RESULTS (sorted by return)")
-    print("-"*60)
+    print("="*60)
+    print(f"{'Rank':<5} {'Strategy':<30} {'Return':>10} {'vs B&H':>10} {'Trades':>7}")
+    print("-"*65)
 
     for i, r in enumerate(results, 1):
-        print(f"{i}. {r['strategy']}")
-        print(f"   Return: {r['return']:.2%} | Period: {r['period']} | Mult: {r['multiplier']:.1f} | Trades: {r['trades']}")
+        vs_bh = r['return'] - buy_hold_return
+        marker = "**" if r['return'] > buy_hold_return else ""
+        print(f"{i:<5} {r['strategy']:<30} {r['return']:>9.2%} {vs_bh:>+9.2%} {r['trades']:>7} {marker}")
 
-    return results[0] if results else None
+    # Return best that beats buy & hold, or overall best
+    beating_strategies = [r for r in results if r['return'] > buy_hold_return]
+    if beating_strategies:
+        print(f"\n>>> {len(beating_strategies)} strategies beat Buy & Hold!")
+        return beating_strategies[0]
+    else:
+        print(f"\n>>> No strategy beats Buy & Hold yet. Using best available.")
+        return results[0] if results else None
 
 
 # =============================================================================
@@ -939,11 +1065,11 @@ def main():
     print("SUPERTREND TRADING SYSTEM v5.0 - OPTIMIZED WITH HTF FILTER")
     print("="*60)
 
-    # Configuration
+    # Configuration - 5 years includes 2022 bear market!
     config = TradingConfig(
         symbol="MSFT",
         initial_capital=10000.0,
-        days_back=730,
+        days_back=1825,  # 5 years - includes 2022 bear market
         use_htf_filter=True
     )
 
@@ -987,6 +1113,11 @@ def main():
     low = stock_data[low_col].values
     close = stock_data[close_col].values
 
+    # Additional strategy settings
+    USE_TRAILING_STOP = False
+    TRAILING_STOP_PCT = 0.08
+    USE_RSI_FILTER = False
+
     # Run multi-strategy comparison first
     if COMPARE_STRATEGIES:
         best_strat = run_strategy_comparison(stock_data, config.symbol, config)
@@ -998,6 +1129,9 @@ def main():
             config.st_multiplier = best_strat['multiplier']
             config.htf_period = best_strat['period']
             config.htf_multiplier = best_strat['multiplier']
+            USE_TRAILING_STOP = best_strat.get('use_trailing', False)
+            TRAILING_STOP_PCT = best_strat.get('trailing_pct', 0.08)
+            USE_RSI_FILTER = best_strat.get('use_rsi', False)
             print(f"\n>>> Using best strategy: {best_strat['strategy']}")
     else:
         # Parameter Optimization for single strategy
@@ -1022,6 +1156,8 @@ def main():
     print(f"HTF Filter: {'Enabled' if config.use_htf_filter else 'Disabled'}")
     print(f"Mode: {'Long Only' if LONG_ONLY else 'Long & Short'}")
     print(f"Filter Mode: {FILTER_MODE}")
+    print(f"Trailing Stop: {'Enabled (' + str(int(TRAILING_STOP_PCT*100)) + '%)' if USE_TRAILING_STOP else 'Disabled'}")
+    print(f"RSI Filter: {'Enabled' if USE_RSI_FILTER else 'Disabled'}")
     print(f"Period: {config.st_period} | Multiplier: {config.st_multiplier}")
 
     # Calculate Supertrend with best parameters
@@ -1034,6 +1170,9 @@ def main():
         stock_data, config.symbol, config.htf_period, config.htf_multiplier
     ).values
 
+    # Calculate RSI if needed
+    rsi = calculate_rsi(close, 14) if USE_RSI_FILTER else None
+
     # Generate Signals
     buy_signals, sell_signals = generate_signals_vectorized(
         close, supertrend, direction, htf_direction, config.use_htf_filter, FILTER_MODE
@@ -1043,7 +1182,13 @@ def main():
     system = OptimizedTradingSystem(config)
 
     # Generate Trades
-    long_trades, short_trades = system.generate_trades(stock_data, buy_signals, sell_signals, LONG_ONLY)
+    long_trades, short_trades = system.generate_trades(
+        stock_data, buy_signals, sell_signals,
+        long_only=LONG_ONLY,
+        use_trailing_stop=USE_TRAILING_STOP,
+        trailing_stop_pct=TRAILING_STOP_PCT,
+        rsi=rsi
+    )
 
     # Calculate Equity Curves
     long_equity, short_equity, combined_equity, buy_hold_equity = system.calculate_equity_curve_vectorized(
