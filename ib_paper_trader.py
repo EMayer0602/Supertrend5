@@ -939,6 +939,56 @@ class IBPaperTrader:
         except Exception as e:
             return f"ERROR: {e}"
 
+    def get_current_prices_batch(self, symbols: List[str]) -> Dict[str, float]:
+        """Get current market prices for multiple symbols at once (FAST)"""
+        prices = {}
+
+        if not self.ib or not self.ib.isConnected():
+            # Fallback to historical data
+            for symbol in symbols:
+                df = self.historical_data.get(symbol)
+                if df is not None and len(df) > 0:
+                    prices[symbol] = float(df['close'].iloc[-1])
+            return prices
+
+        try:
+            # Create all contracts
+            contracts = []
+            for symbol in symbols:
+                exchange, currency = get_ticker_contract_params(symbol)
+                contract = Stock(symbol, exchange, currency)
+                contracts.append(contract)
+
+            # Qualify all contracts at once
+            self.ib.qualifyContracts(*contracts)
+
+            # Request market data for ALL symbols at once (no waiting between)
+            tickers = []
+            for contract in contracts:
+                ticker = self.ib.reqMktData(contract, '', False, False)
+                tickers.append((contract.symbol, contract, ticker))
+
+            # Single wait for all data to arrive
+            self.ib.sleep(1.5)
+
+            # Read all prices
+            for symbol, contract, ticker in tickers:
+                if ticker.last and ticker.last > 0:
+                    prices[symbol] = ticker.last
+                elif ticker.close and ticker.close > 0:
+                    prices[symbol] = ticker.close
+                elif ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
+                    prices[symbol] = (ticker.bid + ticker.ask) / 2
+
+                # Cancel subscription
+                self.ib.cancelMktData(contract)
+
+            return prices
+
+        except Exception as e:
+            logger.error(f"Error in batch price fetch: {e}")
+            return prices
+
     def get_current_price(self, symbol: str) -> Optional[float]:
         """Get current market price for a symbol from IB"""
         if not self.ib or not self.ib.isConnected():
