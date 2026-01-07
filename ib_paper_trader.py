@@ -1112,14 +1112,23 @@ class IBPaperTrader:
                     'daily_str': daily_str
                 })
 
-            # Get daily P&L from PnL subscription
-            self.ib.reqPnL(self.ib.managedAccounts()[0] if self.ib.managedAccounts() else '')
-            self.ib.sleep(0.5)
-            pnl_data = self.ib.pnl()
-            if pnl_data:
-                for p in pnl_data:
-                    daily_pnl_total = p.dailyPnL if p.dailyPnL else 0
-                    break
+            # Get daily P&L from account summary
+            try:
+                account_id = self.ib.managedAccounts()[0] if self.ib.managedAccounts() else ''
+                if account_id:
+                    # Request account summary for daily PnL
+                    tags = 'DailyPnL'
+                    summary = self.ib.accountSummary(account_id)
+                    for item in summary:
+                        if item.tag == 'DailyPnL':
+                            try:
+                                daily_pnl_total = float(item.value)
+                            except:
+                                daily_pnl_total = 0
+                            break
+            except Exception as e:
+                logger.debug(f"Could not get daily PnL: {e}")
+                daily_pnl_total = 0
         elif self.dry_run:
             # Dry run mode - use stored positions
             positions = self.positions
@@ -1176,9 +1185,18 @@ class IBPaperTrader:
                       f"${p['current_price']:>8.2f} | {p['pnl_pct']:>+5.1f}% ${p['pnl_value']:>+6,.0f} | {p['daily_str']:>10}")
 
             print("-"*90)
-            print(f"  {'TOTAL:':<52} ${total_pnl:>+10,.0f} | ${daily_pnl_total:>+10,.0f}")
+            # Handle nan/None for daily P&L
+            import math
+            if daily_pnl_total and not math.isnan(daily_pnl_total):
+                daily_str_total = f"${daily_pnl_total:>+10,.0f}"
+            else:
+                daily_str_total = "       N/A"
+            print(f"  {'TOTAL:':<52} ${total_pnl:>+10,.0f} | {daily_str_total}")
             print(f"\n  Total P/L:  ${total_pnl:>+,.0f}")
-            print(f"  Daily P/L:  ${daily_pnl_total:>+,.0f}")
+            if daily_pnl_total and not math.isnan(daily_pnl_total):
+                print(f"  Daily P/L:  ${daily_pnl_total:>+,.0f}")
+            else:
+                print(f"  Daily P/L:  N/A")
         else:
             print("  No open positions")
 
