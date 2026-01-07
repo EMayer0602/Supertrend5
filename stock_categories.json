@@ -1,7 +1,6 @@
 {
     "_comment": "Stock categories for multi-strategy trading. Edit manually or run categorize_stocks.py",
-    "_last_updated": "2024-01-07",
-
+    "_last_updated": "2026-01-07 13:26",
     "strategies": {
         "SUPERTREND": {
             "description": "Volatile stocks - Supertrend with trailing stop",
@@ -12,12 +11,53 @@
                 "trailing_stop_pct": 0.12
             },
             "tickers": [
-                "NFLX", "COIN", "SHOP", "META", "DKNG", "ARKK", "MRNA", "ROKU",
-                "PYPL", "SNOW", "TSLA", "AMD", "RBLX", "ADBE", "BA", "DIS",
-                "CRM", "NKE", "TGT", "PFE", "UNH", "LOW", "SBUX"
+                "NFLX",
+                "COIN",
+                "SHOP",
+                "META",
+                "DKNG",
+                "ARKK",
+                "MRNA",
+                "ROKU",
+                "PYPL",
+                "SNOW",
+                "TSLA",
+                "AMD",
+                "RBLX",
+                "ADBE",
+                "BA",
+                "DIS",
+                "CRM",
+                "NKE",
+                "TGT",
+                "PFE",
+                "UNH",
+                "LOW",
+                "SBUX",
+                "ABBV",
+                "ARM",
+                "AVGO",
+                "COST",
+                "CRWD",
+                "DOCU",
+                "HD",
+                "KO",
+                "LLY",
+                "MA",
+                "MCD",
+                "MRK",
+                "MSTR",
+                "NVDA",
+                "PINS",
+                "PLTR",
+                "SMCI",
+                "SNAP",
+                "UBER",
+                "V",
+                "WMT",
+                "ZM"
             ]
         },
-
         "TREND_FOLLOW": {
             "description": "Stable uptrends - Buy on trend confirmation, hold until trend breaks",
             "settings": {
@@ -27,11 +67,12 @@
                 "min_trend_strength": 0.6
             },
             "tickers": [
-                "SPY", "QQQ", "JPM", "V", "MA", "WMT", "COST", "HD",
-                "MCD", "PG", "KO", "JNJ", "ABBV", "MRK", "LLY"
+                "SPY",
+                "QQQ",
+                "JPM",
+                "JNJ"
             ]
         },
-
         "MOMENTUM": {
             "description": "Extreme bull-runs - Ride momentum, exit on weakness",
             "settings": {
@@ -40,23 +81,19 @@
                 "momentum_period": 20,
                 "volume_factor": 1.5
             },
-            "tickers": [
-                "NVDA", "AVGO", "ARM", "SMCI", "PLTR", "MSTR"
-            ]
+            "tickers": []
         },
-
         "EXCLUDED": {
             "description": "Stocks to exclude from trading (delisted, too illiquid, etc.)",
             "tickers": [
-                "WBA", "SQ"
+                "WBA",
+                "SQ",
+                "PG"
             ]
         }
     },
-
     "watchlist": {
         "description": "Stocks to analyze but not trade yet",
-        "tickers": [
-            "UBER", "SNAP", "PINS", "DOCU", "ZM", "CRWD"
-        ]
+        "tickers": []
     }
 }
