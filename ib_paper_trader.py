@@ -1112,32 +1112,43 @@ class IBPaperTrader:
                     'daily_str': daily_str
                 })
 
-            # Get daily P&L using reqPnLSingle for each position
+            # Get daily P&L - try multiple methods
             try:
                 account_id = self.ib.managedAccounts()[0] if self.ib.managedAccounts() else ''
-                if account_id and portfolio:
-                    # Request PnL for all positions at once
-                    for item in portfolio:
-                        self.ib.reqPnLSingle(account_id, '', item.contract.conId)
+                if account_id:
+                    # Method 1: reqPnL for total account P&L
+                    self.ib.reqPnL(account_id, '')
+                    self.ib.sleep(1)
 
-                    self.ib.sleep(0.5)  # Wait for all PnL data
+                    pnl_list = self.ib.pnl()
+                    if pnl_list:
+                        for pnl in pnl_list:
+                            if pnl.dailyPnL is not None:
+                                daily_pnl_total = pnl.dailyPnL
+                                break
 
-                    # Read PnL data
-                    pnl_singles = self.ib.pnlSingle()
-                    daily_by_conid = {p.conId: p.dailyPnL for p in pnl_singles if p.dailyPnL is not None}
+                    # Method 2: reqPnLSingle for per-position daily P&L
+                    if portfolio:
+                        for item in portfolio:
+                            self.ib.reqPnLSingle(account_id, '', item.contract.conId)
 
-                    # Update position_data with daily P&L
-                    for i, item in enumerate(portfolio):
-                        conId = item.contract.conId
-                        if conId in daily_by_conid:
-                            daily_val = daily_by_conid[conId]
-                            daily_pnl_total += daily_val
-                            if i < len(position_data):
-                                position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
+                        self.ib.sleep(1)  # Wait longer for data
 
-                    # Cancel all subscriptions
-                    for item in portfolio:
-                        self.ib.cancelPnLSingle(account_id, '', item.contract.conId)
+                        pnl_singles = self.ib.pnlSingle()
+                        daily_by_conid = {p.conId: p.dailyPnL for p in pnl_singles if p.dailyPnL is not None}
+
+                        # Update position_data with daily P&L
+                        for i, item in enumerate(portfolio):
+                            conId = item.contract.conId
+                            if conId in daily_by_conid:
+                                daily_val = daily_by_conid[conId]
+                                if i < len(position_data):
+                                    position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
+
+                        # Cancel all subscriptions
+                        self.ib.cancelPnL(account_id, '')
+                        for item in portfolio:
+                            self.ib.cancelPnLSingle(account_id, '', item.contract.conId)
             except Exception as e:
                 logger.debug(f"Could not get daily PnL: {e}")
         elif self.dry_run:
