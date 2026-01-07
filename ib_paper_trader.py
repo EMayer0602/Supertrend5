@@ -1122,9 +1122,9 @@ class IBPaperTrader:
                     for item in portfolio:
                         self.ib.reqPnLSingle(account_id, '', item.contract.conId)
 
-                    # Wait and poll until we have all data (max 3 seconds)
+                    # Wait and poll until we have all data (max 5 seconds)
                     num_positions = len(portfolio)
-                    for _ in range(6):  # 6 x 0.5s = 3 seconds max
+                    for _ in range(10):  # 10 x 0.5s = 5 seconds max
                         self.ib.sleep(0.5)
                         pnl_singles = self.ib.pnlSingle()
                         if len(pnl_singles) >= num_positions:
