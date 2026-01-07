@@ -580,10 +580,10 @@ class IBPaperTrader:
         # Ensure minimum of 1 share
         return max(1, shares)
 
-    def place_order(self, symbol: str, action: str, quantity: int, order_type: str = "MKT") -> bool:
-        """Place an order"""
+    def place_order(self, symbol: str, action: str, quantity: int, order_type: str = "LMT") -> bool:
+        """Place an order - default to LIMIT at mid-price"""
         if self.dry_run:
-            logger.info(f"[DRY RUN] Would place {action} order for {quantity} shares of {symbol}")
+            logger.info(f"[DRY RUN] Would place {action} LIMIT order for {quantity} shares of {symbol}")
 
             # Simulate order execution
             if action == "BUY":
@@ -609,19 +609,30 @@ class IBPaperTrader:
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
 
-            if order_type == "MKT":
-                order = MarketOrder(action, quantity)
+            # Get bid/ask for mid-price limit order
+            ticker = self.ib.reqMktData(contract)
+            self.ib.sleep(1)
+
+            bid = ticker.bid if ticker.bid and ticker.bid > 0 else None
+            ask = ticker.ask if ticker.ask and ticker.ask > 0 else None
+
+            if bid and ask:
+                # Mid-price
+                mid_price = round((bid + ask) / 2, 2)
+                logger.info(f"{symbol}: Bid={bid:.2f}, Ask={ask:.2f}, Mid={mid_price:.2f}")
             else:
-                # Get current price for limit order
-                ticker = self.ib.reqMktData(contract)
-                self.ib.sleep(1)
-                price = ticker.last if ticker.last else ticker.close
-                order = LimitOrder(action, quantity, price)
+                # Fallback to last price
+                mid_price = ticker.last if ticker.last else ticker.close
+                logger.warning(f"{symbol}: No bid/ask, using last price {mid_price:.2f}")
+
+            # Use LIMIT order at mid-price
+            order = LimitOrder(action, quantity, mid_price)
+            order.tif = 'DAY'  # Good for day
 
             trade = self.ib.placeOrder(contract, order)
             self.ib.sleep(2)  # Wait for order to process
 
-            logger.info(f"Placed {action} order for {quantity} shares of {symbol}")
+            logger.info(f"Placed {action} LIMIT order for {quantity} {symbol} @ {mid_price:.2f}")
 
             # Log trade
             self.trade_log.append({
