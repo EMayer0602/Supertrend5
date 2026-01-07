@@ -1,230 +1,201 @@
-# Supertrend Trading System v5.0
+# Supertrend Multi-Strategy Trading System v5.0
 
-Optimiertes Trading-System basierend auf dem Supertrend-Indikator mit HTF-Filter, RSI-Filterung und automatischem Stock-Screening.
+Optimiertes Trading-System mit mehreren Strategien, automatischer Stock-Kategorisierung und IB Paper Trading.
+
+## Features
+
+- **Multi-Strategy**: SUPERTREND, BUY_HOLD, TREND_FOLLOW, GERMAN
+- **Auto-Kategorisierung**: Backtest-basierte Zuweisung der optimalen Strategie
+- **IB Paper Trading**: Automatischer Handel über Interactive Brokers
+- **Trailing Stop Optimierung**: 20% für BUY_HOLD (backtested)
+
+---
+
+## Strategien
+
+| Strategie | Beschreibung | Signal | Exit |
+|-----------|--------------|--------|------|
+| **SUPERTREND** | Volatile/Seitwärts-Aktien | Supertrend-Indikator | Signal + 12% Trailing |
+| **BUY_HOLD** | Starke Bull-Runs | Immer Long | 20% Trailing + Re-Entry |
+| **TREND_FOLLOW** | ETFs/Stabile Aktien | EMA 20/50 Cross | Signal + Stop |
+| **GERMAN** | Deutsche Aktien (IBIS) | Supertrend | Signal + Stop |
+
+---
+
+## Aktuelle Portfolios (Top 10 je Kategorie)
+
+**SUPERTREND** (schlägt B&H im Backtest):
+```
+PDYN, QBTS, MRNA, PYPL, PFE, NKE, MRK, TGT, UNH, NFLX
+```
+
+**BUY_HOLD** (starke Aufwärtstrends):
+```
+PLTR, NVDA, MSTR, QUBT, COIN, AVGO, MU, META, CRWD, SHOP
+```
+
+**TREND_FOLLOW** (ETFs):
+```
+SPY, QQQ, JPM, JNJ
+```
+
+**GERMAN** (IBIS/EUR):
+```
+TKMS
+```
+
+---
 
 ## Installation
 
 ```bash
-# Virtual Environment erstellen
+# Virtual Environment
 python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
 
-# Aktivieren (Linux/Mac)
-source venv/bin/activate
-
-# Aktivieren (Windows)
-venv\Scripts\activate
-
-# Dependencies installieren
-pip install pandas numpy yfinance plotly
+# Dependencies
+pip install pandas numpy yfinance plotly ib_insync
 ```
-
-## Usage Scenarios
-
-### 1. Standard-Analyse (Einzelne Aktie)
-
-Analysiert eine einzelne Aktie (Standard: MSFT) mit automatischer Parameter-Optimierung.
-
-```bash
-python new5.py
-```
-
-**Was passiert:**
-- Lädt 5 Jahre Kursdaten
-- Testet 8 verschiedene Strategie-Varianten
-- Optimiert Supertrend-Parameter (Period, Multiplier)
-- Vergleicht mit Buy & Hold
-- Erstellt interaktiven HTML-Chart
-
-**Output:**
-- `supertrend_MSFT_results.html` - Interaktiver Chart mit allen Trades
 
 ---
 
-### 2. Multi-Ticker-Analyse (Dow Jones 30 + NASDAQ Top 20)
+## Usage
 
-Testet die Strategie auf 50 der wichtigsten US-Aktien.
-
-```bash
-python new5.py --multi
-```
-
-**Was passiert:**
-- Testet alle 30 Dow Jones Komponenten
-- Testet Top 20 NASDAQ-Aktien
-- Zeigt Win-Rate gegen Buy & Hold
-- Identifiziert beste Performer
-
-**Typische Ergebnisse:**
-- ~39% der Aktien schlagen Buy & Hold
-- Beste bei volatilen Aktien (NFLX, META, TSLA)
-
----
-
-### 3. Enhanced Analysis (Markt-Klassifizierung)
-
-Erweiterte Analyse mit Volatilitäts- und Trend-Klassifizierung.
-
-```bash
-python new5.py --enhanced
-```
-
-**Was passiert:**
-- Klassifiziert Aktien nach Volatilität (HIGH/MEDIUM/LOW)
-- Analysiert Trend-Stärke (STRONG/MODERATE/WEAK)
-- Gibt Empfehlung: SUPERTREND vs BUY_AND_HOLD
-- Berechnet Recommendation Accuracy
-
-**Erkenntnisse:**
-| Volatilität | Win-Rate | Empfehlung |
-|-------------|----------|------------|
-| HIGH        | 75%      | Supertrend |
-| MEDIUM      | 38%      | Gemischt   |
-| LOW         | 0%       | Buy & Hold |
-
----
-
-### 4. Stock Screener (80 Aktien)
-
-Screent 80 populäre Aktien und findet die besten Kandidaten für Supertrend.
+### 1. Signale prüfen (ohne IB)
 
 ```bash
 python new5.py --screen
 ```
 
-**Was passiert:**
-- Screent Tech, Finance, Healthcare, Consumer, Industrial, Energy Aktien
-- Klassifiziert nach Eignung: EXCELLENT, GOOD, NEUTRAL, BUY_HOLD
-- Gibt Top 5 Picks aus
-
-**Typische Top-Picks:**
-1. NFLX - +218% Outperformance
-2. COIN - +204% Outperformance
-3. SHOP - +156% Outperformance
-4. META - +143% Outperformance
-5. DKNG - +118% Outperformance
-
----
-
-## Strategie-Varianten
-
-Das System testet automatisch folgende Strategien:
-
-| Strategie | HTF Filter | RSI | Trailing Stop |
-|-----------|------------|-----|---------------|
-| Long Only (Basic) | Nein | Nein | Nein |
-| Long + Trailing 8% | Nein | Nein | 8% |
-| Long + Trailing 12% | Nein | Nein | 12% |
-| Long + RSI Filter | Nein | Ja | Nein |
-| Long + RSI + Trail 12% | Nein | Ja | 12% |
-| HTF Long Only | Ja | Nein | Nein |
-| HTF + Trail 15% | Ja | Nein | 15% |
-
----
-
-## Kernkonzepte
-
-### Supertrend-Indikator
-- Trend-Following-Indikator basierend auf ATR
-- Generiert klare Buy/Sell-Signale
-- Parameter: Period (5-35), Multiplier (1.5-8.0)
-
-### HTF Filter (Higher Time Frame)
-- Berechnet Supertrend auf Wochen-Basis
-- Filtert Trades gegen den übergeordneten Trend
-- Reduziert Fehlsignale in Seitwärtsmärkten
-
-### RSI Filter
-- Relative Strength Index (14 Perioden)
-- Kauft nur wenn RSI < 70 (nicht überkauft)
-- Vermeidet Einstiege an Hochpunkten
-
-### Trailing Stop
-- Dynamischer Stop-Loss der dem Kurs folgt
-- Sichert Gewinne bei Trendfortsetzung
-- Typisch: 8-15% unter Höchstkurs
-
----
-
-## Wann Supertrend verwenden?
-
-**Ideal für:**
-- Volatile Aktien (NFLX, META, TSLA, COIN)
-- Aktien mit häufigen Trendwechseln
-- Bären-/Seitwärtsmärkte
-- Drawdown-Schutz
-
-**Nicht ideal für:**
-- Stabile Aufwärtstrends (SPY, QQQ, JPM)
-- Niedrig-volatile Blue Chips
-- Extreme Bull-Runs (NVDA 2023-2024)
-
----
-
-## Beispiel-Output
-
-```
-================================================================================
-STRATEGY COMPARISON RESULTS (sorted by return)
-================================================================================
-Rank  Strategy                       Return    vs B&H   Trades
------------------------------------------------------------------
-1     Long + RSI Filter              122.0%    -5.3%       12
-2     HTF Long Only                  118.5%    -8.8%        8
-3     Long Only (Basic)              115.2%   -12.1%       15
-...
-
->>> 2 strategies beat Buy & Hold!
-```
-
----
-
-## 5. IB Paper Trading (Live Trading Simulation)
-
-Handelt die Top 30 Supertrend-Aktien automatisch im Interactive Brokers Paper Trading Account.
+### 2. Stock-Kategorien verwalten
 
 ```bash
-# Voraussetzung: ib_insync installieren
-pip install ib_insync
+# Kategorien anzeigen
+python categorize_stocks.py --list
 
-# Dry-Run (Simulation ohne IB-Verbindung)
+# Ticker hinzufügen
+python categorize_stocks.py --add AAPL GOOGL
+
+# Ticker verschieben
+python categorize_stocks.py --move TSLA BUY_HOLD
+
+# Ticker entfernen
+python categorize_stocks.py --remove SNAP
+
+# Auto-Kategorisierung (Backtest-basiert)
+python categorize_stocks.py --apply
+```
+
+### 3. Paper Trading (IB)
+
+```bash
+# Voraussetzung: TWS/Gateway läuft auf Port 7497
+
+# Dry-Run (Test ohne Orders)
 python ib_paper_trader.py --dry-run
 
-# Echtes Paper Trading (TWS/Gateway muss laufen)
+# Live Paper Trading
 python ib_paper_trader.py
 
-# Nur Status anzeigen
+# Nur Status
 python ib_paper_trader.py --status
+
+# Außerhalb Marktzeiten traden
+python ib_paper_trader.py --force
 ```
 
-**Voraussetzungen:**
-- Interactive Brokers Paper Trading Account
-- TWS (Trader Workstation) oder IB Gateway läuft
-- API-Verbindung aktiviert (Port 7497 für TWS Paper)
+---
 
-**Features:**
-- Handelt automatisch die Top 30 volatilen Aktien
-- 5% max pro Position, max 20 Positionen
-- 8% Stop-Loss + 12% Trailing Stop
-- Signale alle 5 Minuten aktualisiert
-- Persistenter State (überlebt Neustart)
+## Konfiguration
 
-**Top 30 Aktien im Portfolio:**
+Die Ticker und Einstellungen werden in `stock_categories.json` gespeichert:
+
+```json
+{
+    "strategies": {
+        "SUPERTREND": {
+            "settings": {
+                "st_period": 15,
+                "st_multiplier": 4.0,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": ["PDYN", "QBTS", ...]
+        },
+        "BUY_HOLD": {
+            "settings": {
+                "trailing_stop_pct": 0.20,
+                "reentry_after_days": 5
+            },
+            "tickers": ["PLTR", "NVDA", ...]
+        }
+    }
+}
 ```
-NFLX, COIN, SHOP, META, DKNG, ARKK, MRNA, ROKU, PYPL, SNOW,
-TSLA, AMD, RBLX, ADBE, BA, DIS, CRM, NKE, TGT, PFE,
-UNH, LOW, SBUX, SQ, UBER, SNAP, PINS, DOCU, ZM, CRWD
-```
+
+---
+
+## Backtest-Ergebnisse
+
+### SUPERTREND vs Buy & Hold (3 Jahre)
+
+| Ticker | Supertrend | B&H | Outperform |
+|--------|------------|-----|------------|
+| PDYN | +452% | +38% | **+414%** |
+| QBTS | +2966% | +2878% | **+88%** |
+| MRNA | 0% | -81% | **+81%** |
+| PYPL | +21% | -22% | **+44%** |
+
+### BUY_HOLD Trailing Stop Optimierung
+
+| Stop % | Avg Return | vs B&H |
+|--------|------------|--------|
+| 15% | +877% | -164% |
+| **20%** | **+1018%** | **-22%** |
+| 25% | +949% | -91% |
+
+→ **20% Trailing Stop** ist optimal (nur -2% hinter reinem B&H, aber mit Crash-Schutz)
+
+---
+
+## Marktzeiten
+
+Das System handelt nur während NYSE/NASDAQ Öffnungszeiten:
+- **15:30 - 22:00 Berlin Zeit**
+- **09:30 - 16:00 US Eastern Time**
+
+Mit `--force` Flag kann außerhalb der Zeiten gehandelt werden.
 
 ---
 
 ## Dateien
 
-- `new5.py` - Hauptskript mit allen Backtest-Funktionen
-- `ib_paper_trader.py` - IB Paper Trading System
-- `supertrend_*.html` - Generierte Charts
-- `ib_paper_trader_state.json` - Trading State (Positionen, Signale)
-- `ib_paper_trader.log` - Trading Log
-- `venv/` - Virtual Environment (nicht committen)
+| Datei | Beschreibung |
+|-------|--------------|
+| `new5.py` | Backtest-System |
+| `ib_paper_trader.py` | IB Paper Trading |
+| `categorize_stocks.py` | Ticker-Kategorisierung |
+| `stock_categories.json` | Ticker & Settings |
+| `ib_paper_trader_state.json` | Trading State |
+
+---
+
+## Strategie-Logik
+
+### Wann SUPERTREND?
+- Volatile Aktien mit häufigen Trendwechseln
+- Seitwärts-/Bärenmärkte
+- Aktien wo Supertrend B&H im Backtest schlägt
+
+### Wann BUY_HOLD?
+- Starke Aufwärtstrends (NVDA, PLTR, META)
+- Parabolische Bull-Runs
+- Bei diesen Aktien kann Supertrend B&H nicht schlagen
+
+### Wann TREND_FOLLOW?
+- ETFs (SPY, QQQ)
+- Stabile Blue Chips
+- EMA-Crossover als Signal
 
 ---
 
@@ -232,15 +203,16 @@ UNH, LOW, SBUX, SQ, UBER, SNAP, PINS, DOCU, ZM, CRWD
 
 ```bash
 # 1. Setup
-python -m venv venv
-source venv/bin/activate  # oder venv\Scripts\activate (Windows)
+python -m venv venv && source venv/bin/activate
 pip install pandas numpy yfinance plotly ib_insync
 
-# 2. Screener laufen lassen um beste Aktien zu finden
-python new5.py --screen
+# 2. Kategorien prüfen
+python categorize_stocks.py --list
 
-# 3. Paper Trading starten (erst --dry-run testen!)
-python ib_paper_trader.py --dry-run
+# 3. TWS starten (Paper Trading, Port 7497)
+
+# 4. Paper Trading starten
+python ib_paper_trader.py
 ```
 
 ---
