@@ -1,0 +1,62 @@
+{
+    "_comment": "Stock categories for multi-strategy trading. Edit manually or run categorize_stocks.py",
+    "_last_updated": "2024-01-07",
+
+    "strategies": {
+        "SUPERTREND": {
+            "description": "Volatile stocks - Supertrend with trailing stop",
+            "settings": {
+                "st_period": 15,
+                "st_multiplier": 4.0,
+                "stop_loss_pct": 0.08,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": [
+                "NFLX", "COIN", "SHOP", "META", "DKNG", "ARKK", "MRNA", "ROKU",
+                "PYPL", "SNOW", "TSLA", "AMD", "RBLX", "ADBE", "BA", "DIS",
+                "CRM", "NKE", "TGT", "PFE", "UNH", "LOW", "SBUX"
+            ]
+        },
+
+        "TREND_FOLLOW": {
+            "description": "Stable uptrends - Buy on trend confirmation, hold until trend breaks",
+            "settings": {
+                "ema_fast": 20,
+                "ema_slow": 50,
+                "atr_multiplier": 2.0,
+                "min_trend_strength": 0.6
+            },
+            "tickers": [
+                "SPY", "QQQ", "JPM", "V", "MA", "WMT", "COST", "HD",
+                "MCD", "PG", "KO", "JNJ", "ABBV", "MRK", "LLY"
+            ]
+        },
+
+        "MOMENTUM": {
+            "description": "Extreme bull-runs - Ride momentum, exit on weakness",
+            "settings": {
+                "rsi_period": 14,
+                "rsi_overbought": 80,
+                "momentum_period": 20,
+                "volume_factor": 1.5
+            },
+            "tickers": [
+                "NVDA", "AVGO", "ARM", "SMCI", "PLTR", "MSTR"
+            ]
+        },
+
+        "EXCLUDED": {
+            "description": "Stocks to exclude from trading (delisted, too illiquid, etc.)",
+            "tickers": [
+                "WBA", "SQ"
+            ]
+        }
+    },
+
+    "watchlist": {
+        "description": "Stocks to analyze but not trade yet",
+        "tickers": [
+            "UBER", "SNAP", "PINS", "DOCU", "ZM", "CRWD"
+        ]
+    }
+}

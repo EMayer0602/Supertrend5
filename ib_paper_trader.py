@@ -84,48 +84,64 @@ class TradingConfig:
     signal_check_interval: int = 300   # Check signals every 5 minutes
 
 
-# Top 30 Supertrend Candidates (from screener results)
-TOP_30_STOCKS = [
-    # EXCELLENT - High Volatility Winners
-    "NFLX",   # +218% outperformance
-    "COIN",   # +204% outperformance
-    "SHOP",   # +156% outperformance
-    "META",   # +143% outperformance
-    "DKNG",   # +118% outperformance
-    "ARKK",   # +113% outperformance (ETF)
-    "MRNA",   # +81% outperformance
-    "ROKU",   # +69% outperformance
-    "PYPL",   # +62% outperformance
-    "SNOW",   # +60% outperformance
-    "TSLA",   # +9% outperformance
-    "AMD",    # +16% outperformance
-    "RBLX",   # +22% outperformance
+# Config file for stock categories
+CATEGORIES_FILE = "stock_categories.json"
 
-    # GOOD - Medium Volatility Winners
-    "ADBE",   # +72% outperformance
-    "BA",     # +59% outperformance
-    "DIS",    # +58% outperformance
-    "CRM",    # +52% outperformance
-    "NKE",    # +52% outperformance
-    "TGT",    # +42% outperformance
-    "PFE",    # +26% outperformance
-    "UNH",    # +22% outperformance
-    "LOW",    # +22% outperformance
-    "SBUX",   # +22% outperformance
 
-    # Additional volatile stocks for diversification
-    "SQ",     # Square/Block - high volatility fintech
-    "UBER",   # Uber - volatile tech
-    "SNAP",   # Snapchat - high volatility social
-    "PINS",   # Pinterest - volatile social
-    "DOCU",   # DocuSign - volatile SaaS
-    "ZM",     # Zoom - high volatility
-    "CRWD",   # CrowdStrike - volatile cybersecurity
-]
+def load_stock_categories() -> dict:
+    """Load stock categories from config file"""
+    try:
+        with open(CATEGORIES_FILE, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning(f"{CATEGORIES_FILE} not found. Using default stocks.")
+        return None
+
+
+def get_stocks_by_strategy() -> Dict[str, List[str]]:
+    """Get stocks grouped by strategy from config"""
+    config = load_stock_categories()
+
+    if config is None:
+        # Fallback to default
+        return {
+            "SUPERTREND": [
+                "NFLX", "COIN", "SHOP", "META", "DKNG", "ARKK", "MRNA", "ROKU",
+                "PYPL", "SNOW", "TSLA", "AMD", "RBLX", "ADBE", "BA", "DIS",
+                "CRM", "NKE", "TGT", "PFE", "UNH", "LOW", "SBUX"
+            ],
+            "TREND_FOLLOW": ["SPY", "QQQ", "JPM", "V", "MA"],
+            "MOMENTUM": ["NVDA", "AVGO"]
+        }
+
+    stocks = {}
+    for strategy, data in config.get('strategies', {}).items():
+        if strategy != 'EXCLUDED':
+            stocks[strategy] = data.get('tickers', [])
+
+    return stocks
+
+
+def get_all_active_tickers() -> List[str]:
+    """Get all active tickers (excluding EXCLUDED)"""
+    stocks = get_stocks_by_strategy()
+    all_tickers = []
+    for tickers in stocks.values():
+        all_tickers.extend(tickers)
+    return list(set(all_tickers))
+
+
+def get_ticker_strategy(ticker: str) -> str:
+    """Get the strategy for a specific ticker"""
+    stocks = get_stocks_by_strategy()
+    for strategy, tickers in stocks.items():
+        if ticker in tickers:
+            return strategy
+    return "SUPERTREND"  # Default
 
 
 # =============================================================================
-# SUPERTREND CALCULATION
+# INDICATOR CALCULATIONS
 # =============================================================================
 def calculate_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
     """Calculate Average True Range"""
@@ -210,7 +226,7 @@ def calculate_supertrend(df: pd.DataFrame, period: int = 15, multiplier: float =
     return df
 
 
-def get_signal(df: pd.DataFrame) -> str:
+def get_supertrend_signal(df: pd.DataFrame) -> str:
     """Get current trading signal from Supertrend"""
     if len(df) < 2:
         return "HOLD"
@@ -229,6 +245,156 @@ def get_signal(df: pd.DataFrame) -> str:
         return "HOLD_SHORT"
 
 
+# Alias for backward compatibility
+get_signal = get_supertrend_signal
+
+
+def calculate_ema(close: np.ndarray, period: int) -> np.ndarray:
+    """Calculate Exponential Moving Average"""
+    ema = np.zeros_like(close)
+    ema[:period] = np.nan
+    ema[period-1] = np.mean(close[:period])
+
+    multiplier = 2 / (period + 1)
+    for i in range(period, len(close)):
+        ema[i] = close[i] * multiplier + ema[i-1] * (1 - multiplier)
+
+    return ema
+
+
+def calculate_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Calculate Relative Strength Index"""
+    deltas = np.diff(close)
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+
+    avg_gain = np.zeros(len(close))
+    avg_loss = np.zeros(len(close))
+
+    if len(gains) >= period:
+        avg_gain[period] = np.mean(gains[:period])
+        avg_loss[period] = np.mean(losses[:period])
+
+        for i in range(period + 1, len(close)):
+            avg_gain[i] = (avg_gain[i-1] * (period - 1) + gains[i-1]) / period
+            avg_loss[i] = (avg_loss[i-1] * (period - 1) + losses[i-1]) / period
+
+    rs = np.where(avg_loss != 0, avg_gain / avg_loss, 100)
+    rsi = 100 - (100 / (1 + rs))
+    rsi[:period] = 50
+
+    return rsi
+
+
+def apply_trend_follow_strategy(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    TREND_FOLLOW Strategy for stable uptrends
+    - Buy when fast EMA crosses above slow EMA
+    - Sell when fast EMA crosses below slow EMA
+    """
+    close = df['close'].values
+
+    ema_fast = calculate_ema(close, 20)
+    ema_slow = calculate_ema(close, 50)
+
+    df['ema_fast'] = ema_fast
+    df['ema_slow'] = ema_slow
+    df['trend_follow_signal'] = np.where(ema_fast > ema_slow, 1, -1)
+
+    return df
+
+
+def get_trend_follow_signal(df: pd.DataFrame) -> str:
+    """Get signal from TREND_FOLLOW strategy"""
+    if len(df) < 2 or 'trend_follow_signal' not in df.columns:
+        return "HOLD"
+
+    current = df['trend_follow_signal'].iloc[-1]
+    prev = df['trend_follow_signal'].iloc[-2]
+
+    if current == 1 and prev == -1:
+        return "BUY"
+    elif current == -1 and prev == 1:
+        return "SELL"
+    elif current == 1:
+        return "HOLD_LONG"
+    else:
+        return "HOLD_SHORT"
+
+
+def apply_momentum_strategy(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    MOMENTUM Strategy for strong bull-runs
+    - Buy when price makes new high with strong momentum
+    - Sell when momentum weakens or RSI extremely overbought
+    """
+    close = df['close'].values
+    high = df['high'].values
+
+    # RSI
+    rsi = calculate_rsi(close, 14)
+    df['rsi'] = rsi
+
+    # Momentum (20-day rate of change)
+    momentum = np.zeros_like(close)
+    momentum[20:] = (close[20:] - close[:-20]) / close[:-20] * 100
+    df['momentum'] = momentum
+
+    # 20-day high
+    rolling_high = pd.Series(high).rolling(20).max().values
+    df['rolling_high'] = rolling_high
+
+    # Signal: Buy on strong momentum, new highs
+    # Sell when momentum drops or RSI > 80
+    signal = np.zeros(len(close))
+    for i in range(20, len(close)):
+        if momentum[i] > 5 and close[i] >= rolling_high[i] * 0.98:
+            signal[i] = 1  # Bullish
+        elif rsi[i] > 80 or momentum[i] < -5:
+            signal[i] = -1  # Exit
+        else:
+            signal[i] = signal[i-1] if i > 0 else 0
+
+    df['momentum_signal'] = signal
+
+    return df
+
+
+def get_momentum_signal(df: pd.DataFrame) -> str:
+    """Get signal from MOMENTUM strategy"""
+    if len(df) < 2 or 'momentum_signal' not in df.columns:
+        return "HOLD"
+
+    current = df['momentum_signal'].iloc[-1]
+    prev = df['momentum_signal'].iloc[-2]
+
+    if current == 1 and prev != 1:
+        return "BUY"
+    elif current == -1 and prev == 1:
+        return "SELL"
+    elif current == 1:
+        return "HOLD_LONG"
+    else:
+        return "HOLD_SHORT"
+
+
+def get_signal_for_strategy(df: pd.DataFrame, strategy: str) -> str:
+    """Get trading signal based on strategy type"""
+    if strategy == "SUPERTREND":
+        df = calculate_supertrend(df)
+        return get_supertrend_signal(df)
+    elif strategy == "TREND_FOLLOW":
+        df = apply_trend_follow_strategy(df)
+        return get_trend_follow_signal(df)
+    elif strategy == "MOMENTUM":
+        df = apply_momentum_strategy(df)
+        return get_momentum_signal(df)
+    else:
+        # Default to Supertrend
+        df = calculate_supertrend(df)
+        return get_supertrend_signal(df)
+
+
 # =============================================================================
 # IB PAPER TRADER
 # =============================================================================
@@ -241,6 +407,7 @@ class IBPaperTrader:
         self.ib: Optional[IB] = None
         self.positions: Dict[str, dict] = {}
         self.signals: Dict[str, str] = {}
+        self.ticker_strategies: Dict[str, str] = {}  # Track which strategy each ticker uses
         self.historical_data: Dict[str, pd.DataFrame] = {}
         self.trade_log: List[dict] = []
 
@@ -470,10 +637,16 @@ class IBPaperTrader:
         return False
 
     def update_signals(self):
-        """Update trading signals for all stocks"""
+        """Update trading signals for all stocks using their assigned strategies"""
         logger.info("Updating signals for all stocks...")
 
-        for symbol in TOP_30_STOCKS:
+        # Get stocks grouped by strategy
+        stocks_by_strategy = get_stocks_by_strategy()
+        all_tickers = get_all_active_tickers()
+
+        logger.info(f"Tracking {len(all_tickers)} stocks across {len(stocks_by_strategy)} strategies")
+
+        for symbol in all_tickers:
             try:
                 # Fetch data
                 df = self.fetch_historical_data(symbol, days=60)
@@ -484,17 +657,18 @@ class IBPaperTrader:
                 # Store data
                 self.historical_data[symbol] = df
 
-                # Calculate Supertrend
-                df = calculate_supertrend(df, self.config.st_period, self.config.st_multiplier)
+                # Get strategy for this ticker
+                strategy = get_ticker_strategy(symbol)
 
-                # Get signal
-                signal = get_signal(df)
+                # Get signal based on strategy
+                signal = get_signal_for_strategy(df.copy(), strategy)
                 self.signals[symbol] = signal
 
-                current_price = df['close'].iloc[-1]
-                st_value = df['supertrend'].iloc[-1]
+                # Store strategy info
+                self.ticker_strategies[symbol] = strategy
 
-                logger.info(f"{symbol}: Price={current_price:.2f}, ST={st_value:.2f}, Signal={signal}")
+                current_price = df['close'].iloc[-1]
+                logger.info(f"{symbol} [{strategy}]: Price={current_price:.2f}, Signal={signal}")
 
             except Exception as e:
                 logger.error(f"Error updating signal for {symbol}: {e}")
@@ -579,8 +753,13 @@ class IBPaperTrader:
     def show_status(self):
         """Show current portfolio status"""
         print("\n" + "="*80)
-        print("SUPERTREND PAPER TRADING STATUS")
+        print("MULTI-STRATEGY PAPER TRADING STATUS")
         print("="*80)
+
+        # Show strategy breakdown
+        stocks_by_strat = get_stocks_by_strategy()
+        strat_counts = {s: len(t) for s, t in stocks_by_strat.items()}
+        print(f"\nStrategies: " + " | ".join([f"{s}: {c}" for s, c in strat_counts.items()]))
 
         # Account info
         account = self.get_account_info()
@@ -764,11 +943,20 @@ class IBPaperTrader:
 # =============================================================================
 def main():
     print("="*80)
-    print("SUPERTREND IB PAPER TRADING SYSTEM")
+    print("MULTI-STRATEGY IB PAPER TRADING SYSTEM")
     print("="*80)
-    print(f"\nTracking {len(TOP_30_STOCKS)} stocks:")
-    print(", ".join(TOP_30_STOCKS[:15]))
-    print(", ".join(TOP_30_STOCKS[15:]))
+
+    # Show stocks by strategy
+    stocks_by_strategy = get_stocks_by_strategy()
+    all_tickers = get_all_active_tickers()
+
+    print(f"\nTracking {len(all_tickers)} stocks across {len(stocks_by_strategy)} strategies:")
+    for strategy, tickers in stocks_by_strategy.items():
+        if tickers:
+            print(f"\n  {strategy} ({len(tickers)}):")
+            # Print in rows of 10
+            for i in range(0, len(tickers), 10):
+                print(f"    {', '.join(tickers[i:i+10])}")
 
     # Parse arguments
     dry_run = "--dry-run" in sys.argv
@@ -798,8 +986,9 @@ def main():
         print(f"  Max Positions: {config.max_positions}")
         print(f"  Stop Loss: {config.stop_loss_pct*100:.0f}%")
         print(f"  Trailing Stop: {config.trailing_stop_pct*100:.0f}%")
-        print(f"  Supertrend: Period={config.st_period}, Mult={config.st_multiplier}")
-        print(f"  Market Hours: NYSE/NASDAQ 9:30-16:00 ET (Mon-Fri)")
+        print(f"  Market Hours: NYSE/NASDAQ 15:30-22:00 Berlin (9:30-16:00 ET)")
+        print(f"\nConfig: {CATEGORIES_FILE}")
+        print(f"Edit tickers: python categorize_stocks.py --list")
         print(f"\nStarting trader...")
 
         trader.run(force=force)
