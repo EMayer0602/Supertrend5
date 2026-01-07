@@ -582,6 +582,21 @@ class IBPaperTrader:
                 clientId=self.config.client_id
             )
             logger.info(f"Connected to IB at {self.config.host}:{self.config.port}")
+
+            # Check market data type
+            mdt = self.check_market_data_type()
+            if mdt == "LIVE":
+                logger.info(f"✅ Market Data: LIVE (real-time)")
+            elif mdt == "DELAYED":
+                logger.warning(f"⚠️  Market Data: DELAYED (15-20 min old!)")
+                logger.warning(f"⚠️  Trading mit verzögerten Daten ist riskant!")
+                print("\n" + "!"*60)
+                print("!!! WARNUNG: VERZÖGERTE MARKTDATEN (15-20 Min) !!!")
+                print("!!! Preise sind NICHT aktuell - Trading ist riskant !!!")
+                print("!"*60 + "\n")
+            else:
+                logger.info(f"Market Data Type: {mdt}")
+
             return True
         except Exception as e:
             logger.error(f"Failed to connect to IB: {e}")
@@ -879,6 +894,36 @@ class IBPaperTrader:
                     quantity = int(current_positions[symbol]['quantity'])
                     self.place_order(symbol, "SELL", quantity)
 
+    def check_market_data_type(self) -> str:
+        """Check if market data is live or delayed"""
+        if not self.ib or not self.ib.isConnected():
+            return "DISCONNECTED"
+
+        try:
+            # Test with SPY
+            contract = Stock('SPY', 'SMART', 'USD')
+            self.ib.qualifyContracts(contract)
+            ticker = self.ib.reqMktData(contract)
+            self.ib.sleep(2)
+
+            # marketDataType: 1=Live, 2=Frozen, 3=Delayed, 4=Delayed-Frozen
+            mdt = ticker.marketDataType if hasattr(ticker, 'marketDataType') else None
+
+            self.ib.cancelMktData(contract)
+
+            if mdt == 1:
+                return "LIVE"
+            elif mdt == 2:
+                return "FROZEN"
+            elif mdt == 3:
+                return "DELAYED"
+            elif mdt == 4:
+                return "DELAYED-FROZEN"
+            else:
+                return f"UNKNOWN ({mdt})"
+        except Exception as e:
+            return f"ERROR: {e}"
+
     def get_current_price(self, symbol: str) -> Optional[float]:
         """Get current market price for a symbol from IB"""
         if not self.ib or not self.ib.isConnected():
@@ -893,6 +938,12 @@ class IBPaperTrader:
             self.ib.qualifyContracts(contract)
             ticker = self.ib.reqMktData(contract, '', False, False)
             self.ib.sleep(1)  # Wait for data
+
+            # Check if delayed
+            if hasattr(ticker, 'marketDataType') and ticker.marketDataType == 3:
+                if not hasattr(self, '_delayed_warning_shown'):
+                    logger.warning(f"⚠️  DELAYED DATA detected for {symbol}! Prices are 15-20 min old!")
+                    self._delayed_warning_shown = True
 
             # Try different price fields
             if ticker.last and ticker.last > 0:
@@ -948,6 +999,7 @@ class IBPaperTrader:
         strat_counts = {s: len(t) for s, t in stocks_by_strat.items()}
         account = self.get_account_info()
         positions = self.get_current_positions()
+        market_data_type = self.check_market_data_type() if self.ib else "N/A"
 
         # Collect position data
         position_data = []
@@ -997,6 +1049,14 @@ class IBPaperTrader:
         print("\n" + "="*90)
         print("MULTI-STRATEGY PAPER TRADING STATUS")
         print("="*90)
+
+        # Market data warning
+        if market_data_type == "DELAYED":
+            print("\n⚠️  WARNUNG: VERZÖGERTE DATEN (15-20 Min) - Preise nicht aktuell!")
+        elif market_data_type == "LIVE":
+            print(f"\n✅ Market Data: LIVE (Echtzeit)")
+        else:
+            print(f"\nMarket Data: {market_data_type}")
 
         print(f"\nStrategies: " + " | ".join([f"{s}: {c}" for s, c in strat_counts.items()]))
         print(f"\nAccount Value: ${account.get('NetLiquidation', 0):,.2f}")
