@@ -12,6 +12,7 @@ Usage:
     python ib_paper_trader.py              # Run paper trader
     python ib_paper_trader.py --dry-run    # Simulation mode (no orders)
     python ib_paper_trader.py --status     # Show current positions
+    python ib_paper_trader.py --force      # Run even outside market hours
 """
 
 import pandas as pd
@@ -23,6 +24,12 @@ import json
 import time
 import logging
 import sys
+
+# Timezone handling
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # pip install backports.zoneinfo
 
 # Configure logging
 logging.basicConfig(
@@ -632,7 +639,48 @@ class IBPaperTrader:
 
         print("="*80 + "\n")
 
-    def run(self):
+    def is_market_open(self) -> Tuple[bool, str]:
+        """
+        Check if US stock market (NYSE/NASDAQ) is open.
+        Regular Trading Hours: 9:30 AM - 4:00 PM Eastern Time, Mon-Fri
+        Returns: (is_open, status_message)
+        """
+        try:
+            et = ZoneInfo("America/New_York")
+        except Exception:
+            # Fallback if timezone not available
+            logger.warning("Could not load timezone, assuming market is open")
+            return True, "Timezone unavailable"
+
+        now_et = datetime.now(et)
+        weekday = now_et.weekday()  # 0=Monday, 6=Sunday
+
+        # Weekend check
+        if weekday >= 5:
+            next_open = now_et + timedelta(days=(7 - weekday))
+            next_open = next_open.replace(hour=9, minute=30, second=0, microsecond=0)
+            return False, f"Weekend - Market opens {next_open.strftime('%A %H:%M ET')}"
+
+        market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        current_time = now_et.time()
+        open_time = market_open.time()
+        close_time = market_close.time()
+
+        if current_time < open_time:
+            mins_until = int((market_open - now_et).total_seconds() / 60)
+            return False, f"Pre-market - Opens in {mins_until} minutes ({market_open.strftime('%H:%M ET')})"
+        elif current_time >= close_time:
+            next_open = now_et + timedelta(days=1)
+            if next_open.weekday() >= 5:
+                next_open += timedelta(days=(7 - next_open.weekday()))
+            return False, f"After-hours - Market closed. Opens {next_open.strftime('%A 09:30 ET')}"
+        else:
+            mins_until_close = int((market_close - now_et).total_seconds() / 60)
+            return True, f"Market OPEN - Closes in {mins_until_close} minutes ({market_close.strftime('%H:%M ET')})"
+
+    def run(self, force: bool = False):
         """Main trading loop"""
         logger.info("Starting Supertrend Paper Trader...")
 
@@ -643,6 +691,18 @@ class IBPaperTrader:
         try:
             while True:
                 try:
+                    # Check market hours
+                    is_open, status = self.is_market_open()
+                    print(f"\n>>> {status}")
+
+                    if not is_open and not force:
+                        logger.info(f"Market closed. Waiting... (use --force to override)")
+                        # Show status but don't trade
+                        self.show_status()
+                        # Wait longer when market is closed (5 minutes)
+                        time.sleep(300)
+                        continue
+
                     # Update signals
                     self.update_signals()
 
@@ -704,15 +764,21 @@ def main():
     # Parse arguments
     dry_run = "--dry-run" in sys.argv
     status_only = "--status" in sys.argv
+    force = "--force" in sys.argv
 
     if dry_run:
         print("\n*** DRY RUN MODE - No real orders will be placed ***")
+
+    if force:
+        print("\n*** FORCE MODE - Trading even outside market hours ***")
 
     config = TradingConfig()
     trader = IBPaperTrader(config, dry_run=dry_run)
 
     if status_only:
         trader.connect()
+        is_open, status = trader.is_market_open()
+        print(f"\n>>> {status}")
         trader.update_signals()
         trader.show_status()
         trader.disconnect()
@@ -724,9 +790,10 @@ def main():
         print(f"  Stop Loss: {config.stop_loss_pct*100:.0f}%")
         print(f"  Trailing Stop: {config.trailing_stop_pct*100:.0f}%")
         print(f"  Supertrend: Period={config.st_period}, Mult={config.st_multiplier}")
+        print(f"  Market Hours: NYSE/NASDAQ 9:30-16:00 ET (Mon-Fri)")
         print(f"\nStarting trader...")
 
-        trader.run()
+        trader.run(force=force)
 
 
 if __name__ == "__main__":
