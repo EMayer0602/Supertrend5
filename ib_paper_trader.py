@@ -293,6 +293,85 @@ def calculate_kama(close: np.ndarray, period: int = 10, fast: int = 2, slow: int
     return kama
 
 
+def calculate_jma(close: np.ndarray, period: int = 7, phase: float = 0, power: int = 2) -> np.ndarray:
+    """Calculate Jurik Moving Average (JMA)
+
+    JMA is a smooth, low-lag moving average that adapts to price action.
+    - Smoother than EMA with less lag
+    - Good for trend detection
+    """
+    n = len(close)
+    jma = np.zeros(n)
+    e0 = np.zeros(n)
+    e1 = np.zeros(n)
+    e2 = np.zeros(n)
+
+    beta = 0.45 * (period - 1) / (0.45 * (period - 1) + 2)
+    alpha = beta ** power
+
+    for i in range(1, n):
+        e0[i] = (1 - alpha) * close[i] + alpha * e0[i-1]
+        e1[i] = (close[i] - e0[i]) * (1 - beta) + beta * e1[i-1]
+        e2[i] = (e0[i] + phase * e1[i] - jma[i-1]) * (1 - alpha)**2 + alpha**2 * e2[i-1]
+        jma[i] = jma[i-1] + e2[i]
+
+    return jma
+
+
+def apply_kama_strategy(df: pd.DataFrame) -> pd.DataFrame:
+    """KAMA Strategy - Kaufman Adaptive Moving Average crossover"""
+    close = df['close'].values
+
+    kama_fast = calculate_kama(close, period=10, fast=2, slow=30)
+    kama_slow = calculate_kama(close, period=30, fast=2, slow=30)
+
+    df['kama_fast'] = kama_fast
+    df['kama_slow'] = kama_slow
+    df['kama_signal'] = np.where(kama_fast > kama_slow, 1, -1)
+
+    return df
+
+
+def get_kama_signal(df: pd.DataFrame) -> str:
+    """Get signal from KAMA strategy"""
+    if len(df) < 2 or 'kama_signal' not in df.columns:
+        return "HOLD"
+
+    current = df['kama_signal'].iloc[-1]
+
+    if current == 1:
+        return "BUY"
+    else:
+        return "SELL"
+
+
+def apply_jma_strategy(df: pd.DataFrame) -> pd.DataFrame:
+    """JMA Strategy - Jurik Moving Average crossover"""
+    close = df['close'].values
+
+    jma_fast = calculate_jma(close, period=7)
+    jma_slow = calculate_jma(close, period=21)
+
+    df['jma_fast'] = jma_fast
+    df['jma_slow'] = jma_slow
+    df['jma_signal'] = np.where(jma_fast > jma_slow, 1, -1)
+
+    return df
+
+
+def get_jma_signal(df: pd.DataFrame) -> str:
+    """Get signal from JMA strategy"""
+    if len(df) < 2 or 'jma_signal' not in df.columns:
+        return "HOLD"
+
+    current = df['jma_signal'].iloc[-1]
+
+    if current == 1:
+        return "BUY"
+    else:
+        return "SELL"
+
+
 def calculate_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     """Calculate Relative Strength Index"""
     deltas = np.diff(close)
@@ -445,6 +524,12 @@ def get_signal_for_strategy(df: pd.DataFrame, strategy: str) -> str:
     if strategy == "SUPERTREND":
         df = calculate_supertrend(df)
         return get_supertrend_signal(df)
+    elif strategy == "KAMA":
+        df = apply_kama_strategy(df)
+        return get_kama_signal(df)
+    elif strategy == "JMA":
+        df = apply_jma_strategy(df)
+        return get_jma_signal(df)
     elif strategy == "TREND_FOLLOW":
         df = apply_trend_follow_strategy(df)
         return get_trend_follow_signal(df)

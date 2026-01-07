@@ -1,9 +1,9 @@
 {
-    "_comment": "Stock categories - Optimized by indicator backtest (SUPERTREND, KAMA, JMA)",
-    "_last_updated": "2026-01-07 16:45",
+    "_comment": "Stock categories - Optimized by indicator backtest",
+    "_last_updated": "2026-01-07 16:40",
     "strategies": {
         "SUPERTREND": {
-            "description": "Stocks where Supertrend indicator beats B&H",
+            "description": "Stocks where Supertrend indicator performs best",
             "settings": {
                 "st_period": 15,
                 "st_multiplier": 4.0,
@@ -21,7 +21,7 @@
             ]
         },
         "KAMA": {
-            "description": "Stocks where KAMA crossover beats B&H",
+            "description": "Stocks where KAMA crossover performs best",
             "settings": {
                 "kama_fast": 10,
                 "kama_slow": 30,
@@ -33,7 +33,7 @@
             ]
         },
         "JMA": {
-            "description": "Stocks where JMA crossover beats B&H",
+            "description": "Stocks where JMA crossover performs best",
             "settings": {
                 "jma_fast": 7,
                 "jma_slow": 21,
@@ -44,9 +44,9 @@
             ]
         },
         "BUY_HOLD": {
-            "description": "Strong uptrends - no indicator beats B&H, use 20% trailing stop",
+            "description": "Strong uptrends - no indicator beats B&H",
             "settings": {
-                "trailing_stop_pct": 0.20,
+                "trailing_stop_pct": 0.2,
                 "reentry_after_days": 5
             },
             "tickers": [
@@ -62,8 +62,10 @@
                 "MU",
                 "NVDA",
                 "PLTR",
+                "QQQ",
                 "QUBT",
                 "SHOP",
+                "SPY",
                 "TSLA",
                 "UBER"
             ]
@@ -72,24 +74,13 @@
             "description": "ETFs - KAMA crossover",
             "settings": {
                 "kama_fast": 10,
-                "kama_slow": 30,
-                "trailing_stop_pct": 0.15
+                "kama_slow": 30
             },
             "tickers": [
                 "SPY",
-                "QQQ"
-            ]
-        },
-        "GERMAN": {
-            "description": "German stocks (IBIS exchange) - Supertrend",
-            "settings": {
-                "st_period": 15,
-                "st_multiplier": 4.0,
-                "exchange": "SMART",
-                "currency": "EUR"
-            },
-            "tickers": [
-                "TKMS"
+                "QQQ",
+                "JPM",
+                "JNJ"
             ]
         },
         "EXCLUDED": {
