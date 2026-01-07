@@ -1000,7 +1000,7 @@ class IBPaperTrader:
             return None
 
     def show_status(self):
-        """Show current portfolio status with daily P&L"""
+        """Show current portfolio status with daily P&L - optimized for speed"""
         import logging
 
         # Temporarily disable IB logging to prevent interrupting output
@@ -1015,41 +1015,77 @@ class IBPaperTrader:
         stocks_by_strat = get_stocks_by_strategy()
         strat_counts = {s: len(t) for s, t in stocks_by_strat.items()}
         account = self.get_account_info()
-        positions = self.get_current_positions()
         market_data_type = self.check_market_data_type() if self.ib else "N/A"
 
-        # Collect position data
+        # Use IB portfolio() directly for real-time data (much faster than individual reqMktData)
         position_data = []
         total_pnl = 0
         daily_pnl_total = 0
 
-        if positions:
-            for symbol, pos in positions.items():
-                current_price = self.get_current_price(symbol)
-                if current_price is None:
-                    current_price = pos['avg_cost']
+        if self.ib and self.ib.isConnected():
+            # Get portfolio with real-time values from IB
+            portfolio = self.ib.portfolio()
 
+            for item in portfolio:
+                symbol = item.contract.symbol
+                quantity = item.position
+                entry_price = item.averageCost
+                market_value = item.marketValue
+                unrealized_pnl = item.unrealizedPNL
+
+                # Calculate current price from market value
+                if quantity != 0:
+                    current_price = abs(market_value / quantity)
+                else:
+                    current_price = entry_price
+
+                if quantity > 0:
+                    pnl_pct = (unrealized_pnl / (entry_price * quantity)) * 100 if entry_price * quantity != 0 else 0
+                    pos_type = "LONG"
+                else:
+                    pnl_pct = (unrealized_pnl / (entry_price * abs(quantity))) * 100 if entry_price * abs(quantity) != 0 else 0
+                    pos_type = "SHORT"
+
+                total_pnl += unrealized_pnl
+
+                # Daily P&L from IB account summary (we'll use dailyPnL if available)
+                daily_str = "N/A"
+
+                position_data.append({
+                    'symbol': symbol,
+                    'pos_type': pos_type,
+                    'quantity': quantity,
+                    'entry_price': entry_price,
+                    'current_price': current_price,
+                    'pnl_pct': pnl_pct,
+                    'pnl_value': unrealized_pnl,
+                    'daily_str': daily_str
+                })
+
+            # Get daily P&L from PnL subscription
+            self.ib.reqPnL(self.ib.managedAccounts()[0] if self.ib.managedAccounts() else '')
+            self.ib.sleep(0.5)
+            pnl_data = self.ib.pnl()
+            if pnl_data:
+                for p in pnl_data:
+                    daily_pnl_total = p.dailyPnL if p.dailyPnL else 0
+                    break
+        elif self.dry_run:
+            # Dry run mode - use stored positions
+            positions = self.positions
+            for symbol, pos in positions.items():
+                current_price = pos.get('avg_cost', 0)
                 entry_price = pos['avg_cost']
                 quantity = pos['quantity']
 
                 if quantity > 0:
-                    pnl_pct = (current_price - entry_price) / entry_price * 100
-                    pnl_value = (current_price - entry_price) * quantity
+                    pnl_pct = 0
+                    pnl_value = 0
                     pos_type = "LONG"
                 else:
-                    pnl_pct = (entry_price - current_price) / entry_price * 100
-                    pnl_value = (entry_price - current_price) * abs(quantity)
+                    pnl_pct = 0
+                    pnl_value = 0
                     pos_type = "SHORT"
-
-                total_pnl += pnl_value
-
-                daily_change = self.get_daily_pnl(symbol)
-                if daily_change is not None:
-                    daily_pnl = daily_change * abs(quantity)
-                    daily_pnl_total += daily_pnl
-                    daily_str = f"${daily_pnl:>+,.0f}"
-                else:
-                    daily_str = "N/A"
 
                 position_data.append({
                     'symbol': symbol,
@@ -1059,7 +1095,7 @@ class IBPaperTrader:
                     'current_price': current_price,
                     'pnl_pct': pnl_pct,
                     'pnl_value': pnl_value,
-                    'daily_str': daily_str
+                    'daily_str': "N/A"
                 })
 
         # Now print everything at once (no IB calls during print)
@@ -1079,7 +1115,7 @@ class IBPaperTrader:
         print(f"\nAccount Value: ${account.get('NetLiquidation', 0):,.2f}")
         print(f"Available Funds: ${account.get('AvailableFunds', 0):,.2f}")
 
-        print(f"\nOpen Positions: {len(positions)}/{self.config.max_positions}")
+        print(f"\nOpen Positions: {len(position_data)}/{self.config.max_positions}")
         print("-"*90)
         print(f"  {'Symbol':<6} | {'Type':<5} | {'Qty':>6} | {'Entry':>10} | {'Current':>10} | {'Total P/L':>12} | {'Daily P/L':>10}")
         print("-"*90)
