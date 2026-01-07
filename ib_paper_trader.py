@@ -262,6 +262,37 @@ def calculate_ema(close: np.ndarray, period: int) -> np.ndarray:
     return ema
 
 
+def calculate_kama(close: np.ndarray, period: int = 10, fast: int = 2, slow: int = 30) -> np.ndarray:
+    """Calculate Kaufman Adaptive Moving Average (KAMA)
+
+    KAMA adapts to market volatility:
+    - Fast in trending markets
+    - Slow in choppy/sideways markets
+    """
+    n = len(close)
+    kama = np.zeros(n)
+    kama[:period] = close[:period]
+
+    for i in range(period, n):
+        # Efficiency Ratio = Change / Volatility
+        change = abs(close[i] - close[i-period])
+        volatility = sum(abs(close[j] - close[j-1]) for j in range(i-period+1, i+1))
+
+        if volatility == 0:
+            er = 0
+        else:
+            er = change / volatility
+
+        # Smoothing constant adapts based on efficiency ratio
+        fast_sc = 2 / (fast + 1)
+        slow_sc = 2 / (slow + 1)
+        sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+
+        kama[i] = kama[i-1] + sc * (close[i] - kama[i-1])
+
+    return kama
+
+
 def calculate_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     """Calculate Relative Strength Index"""
     deltas = np.diff(close)
@@ -288,18 +319,20 @@ def calculate_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
 
 def apply_trend_follow_strategy(df: pd.DataFrame) -> pd.DataFrame:
     """
-    TREND_FOLLOW Strategy for stable uptrends
-    - Buy when fast EMA crosses above slow EMA
-    - Sell when fast EMA crosses below slow EMA
+    TREND_FOLLOW Strategy for stable uptrends using KAMA
+    - KAMA adapts to volatility (faster in trends, slower in chop)
+    - Buy when fast KAMA crosses above slow KAMA
+    - Sell when fast KAMA crosses below slow KAMA
     """
     close = df['close'].values
 
-    ema_fast = calculate_ema(close, 20)
-    ema_slow = calculate_ema(close, 50)
+    # Use KAMA instead of EMA for better adaptation
+    kama_fast = calculate_kama(close, period=10, fast=2, slow=30)
+    kama_slow = calculate_kama(close, period=30, fast=2, slow=30)
 
-    df['ema_fast'] = ema_fast
-    df['ema_slow'] = ema_slow
-    df['trend_follow_signal'] = np.where(ema_fast > ema_slow, 1, -1)
+    df['kama_fast'] = kama_fast
+    df['kama_slow'] = kama_slow
+    df['trend_follow_signal'] = np.where(kama_fast > kama_slow, 1, -1)
 
     return df
 
@@ -793,11 +826,31 @@ class IBPaperTrader:
             logger.error(f"Error getting price for {symbol}: {e}")
             return None
 
+    def get_daily_pnl(self, symbol: str) -> Optional[float]:
+        """Get today's P&L for a symbol (from today's open)"""
+        if not self.ib:
+            return None
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            self.ib.qualifyContracts(contract)
+            ticker = self.ib.reqMktData(contract)
+            self.ib.sleep(1)
+
+            # Today's open price
+            open_price = ticker.open if ticker.open else None
+            current_price = ticker.last if ticker.last else ticker.close
+
+            if open_price and current_price:
+                return current_price - open_price
+            return None
+        except:
+            return None
+
     def show_status(self):
-        """Show current portfolio status"""
-        print("\n" + "="*80)
+        """Show current portfolio status with daily P&L"""
+        print("\n" + "="*90)
         print("MULTI-STRATEGY PAPER TRADING STATUS")
-        print("="*80)
+        print("="*90)
 
         # Show strategy breakdown
         stocks_by_strat = get_stocks_by_strategy()
@@ -812,9 +865,13 @@ class IBPaperTrader:
         # Positions
         positions = self.get_current_positions()
         print(f"\nOpen Positions: {len(positions)}/{self.config.max_positions}")
-        print("-"*60)
+        print("-"*90)
+        print(f"  {'Symbol':<6} | {'Type':<5} | {'Qty':>6} | {'Entry':>10} | {'Current':>10} | {'Total P/L':>12} | {'Daily P/L':>10}")
+        print("-"*90)
 
         total_pnl = 0
+        daily_pnl_total = 0
+
         if positions:
             for symbol, pos in positions.items():
                 # Get current price from IB
@@ -839,11 +896,22 @@ class IBPaperTrader:
 
                 total_pnl += pnl_value
 
-                print(f"  {symbol:<6} | {pos_type:<5} | Qty: {quantity:>6.0f} | Entry: ${entry_price:>8.2f} | "
-                      f"Current: ${current_price:>8.2f} | P/L: {pnl_pct:>+6.1f}% (${pnl_value:>+,.0f})")
+                # Daily P&L
+                daily_change = self.get_daily_pnl(symbol)
+                if daily_change is not None:
+                    daily_pnl = daily_change * abs(quantity)
+                    daily_pnl_total += daily_pnl
+                    daily_str = f"${daily_pnl:>+,.0f}"
+                else:
+                    daily_str = "N/A"
 
-            print("-"*60)
-            print(f"  {'TOTAL P/L:':<52} ${total_pnl:>+,.0f}")
+                print(f"  {symbol:<6} | {pos_type:<5} | {quantity:>6.0f} | ${entry_price:>8.2f} | "
+                      f"${current_price:>8.2f} | {pnl_pct:>+5.1f}% ${pnl_value:>+6,.0f} | {daily_str:>10}")
+
+            print("-"*90)
+            print(f"  {'TOTAL:':<52} ${total_pnl:>+10,.0f} | ${daily_pnl_total:>+10,.0f}")
+            print(f"\n  📈 Total P/L:  ${total_pnl:>+,.0f}")
+            print(f"  📅 Daily P/L:  ${daily_pnl_total:>+,.0f}")
         else:
             print("  No open positions")
 
