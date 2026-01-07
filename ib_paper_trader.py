@@ -537,6 +537,38 @@ class IBPaperTrader:
                     quantity = int(current_positions[symbol]['quantity'])
                     self.place_order(symbol, "SELL", quantity)
 
+    def get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current market price for a symbol from IB"""
+        if not self.ib or not self.ib.isConnected():
+            # Fallback to historical data
+            df = self.historical_data.get(symbol)
+            if df is not None and len(df) > 0:
+                return float(df['close'].iloc[-1])
+            return None
+
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            self.ib.qualifyContracts(contract)
+            ticker = self.ib.reqMktData(contract, '', False, False)
+            self.ib.sleep(1)  # Wait for data
+
+            # Try different price fields
+            if ticker.last and ticker.last > 0:
+                price = ticker.last
+            elif ticker.close and ticker.close > 0:
+                price = ticker.close
+            elif ticker.bid and ticker.ask:
+                price = (ticker.bid + ticker.ask) / 2
+            else:
+                price = None
+
+            self.ib.cancelMktData(contract)
+            return price
+
+        except Exception as e:
+            logger.error(f"Error getting price for {symbol}: {e}")
+            return None
+
     def show_status(self):
         """Show current portfolio status"""
         print("\n" + "="*80)
@@ -553,14 +585,36 @@ class IBPaperTrader:
         print(f"\nOpen Positions: {len(positions)}/{self.config.max_positions}")
         print("-"*60)
 
+        total_pnl = 0
         if positions:
             for symbol, pos in positions.items():
-                df = self.historical_data.get(symbol)
-                current_price = df['close'].iloc[-1] if df is not None else pos['avg_cost']
+                # Get current price from IB
+                current_price = self.get_current_price(symbol)
+                if current_price is None:
+                    current_price = pos['avg_cost']
+
                 entry_price = pos['avg_cost']
-                pnl = (current_price - entry_price) / entry_price * 100
-                print(f"  {symbol:<6} | Qty: {pos['quantity']:>5} | Entry: ${entry_price:>8.2f} | "
-                      f"Current: ${current_price:>8.2f} | P/L: {pnl:>+6.1f}%")
+                quantity = pos['quantity']
+
+                # Calculate P/L correctly for long and short positions
+                if quantity > 0:
+                    # Long position
+                    pnl_pct = (current_price - entry_price) / entry_price * 100
+                    pnl_value = (current_price - entry_price) * quantity
+                    pos_type = "LONG"
+                else:
+                    # Short position (negative quantity)
+                    pnl_pct = (entry_price - current_price) / entry_price * 100
+                    pnl_value = (entry_price - current_price) * abs(quantity)
+                    pos_type = "SHORT"
+
+                total_pnl += pnl_value
+
+                print(f"  {symbol:<6} | {pos_type:<5} | Qty: {quantity:>6.0f} | Entry: ${entry_price:>8.2f} | "
+                      f"Current: ${current_price:>8.2f} | P/L: {pnl_pct:>+6.1f}% (${pnl_value:>+,.0f})")
+
+            print("-"*60)
+            print(f"  {'TOTAL P/L:':<52} ${total_pnl:>+,.0f}")
         else:
             print("  No open positions")
 
