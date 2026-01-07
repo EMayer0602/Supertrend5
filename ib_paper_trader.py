@@ -1137,13 +1137,19 @@ class IBPaperTrader:
                         pnl_singles = self.ib.pnlSingle()
                         daily_by_conid = {p.conId: p.dailyPnL for p in pnl_singles if p.dailyPnL is not None}
 
-                        # Update position_data with daily P&L
+                        # Update position_data with daily P&L and sum total
+                        daily_sum = 0
                         for i, item in enumerate(portfolio):
                             conId = item.contract.conId
                             if conId in daily_by_conid:
                                 daily_val = daily_by_conid[conId]
+                                daily_sum += daily_val
                                 if i < len(position_data):
                                     position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
+
+                        # Use sum if reqPnL didn't return total
+                        if daily_pnl_total == 0 and daily_sum != 0:
+                            daily_pnl_total = daily_sum
 
                         # Cancel all subscriptions
                         self.ib.cancelPnL(account_id, '')
