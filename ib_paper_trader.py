@@ -575,6 +575,12 @@ class IBPaperTrader:
         self.trade_log: List[dict] = []
         self.pnl_subscribed: bool = False  # Track if PnL subscriptions are active
 
+        # Cached data for when disconnected
+        self.cached_account: Dict[str, float] = {}
+        self.cached_portfolio: List = []
+        self.cached_pnl_singles: List = []
+        self.cached_pnl_total: float = 0
+
         # Load existing state
         self._load_state()
 
@@ -643,6 +649,26 @@ class IBPaperTrader:
             self.ib.disconnect()
             logger.info("Disconnected from IB")
 
+    def reconnect(self) -> bool:
+        """Try to reconnect to IB"""
+        logger.info("Attempting to reconnect to IB...")
+        self.pnl_subscribed = False  # Reset subscription flag
+
+        if self.ib:
+            try:
+                self.ib.disconnect()
+            except:
+                pass
+            self.ib = None
+
+        # Wait before reconnecting
+        time.sleep(5)
+        return self.connect()
+
+    def is_connected(self) -> bool:
+        """Check if connected to IB"""
+        return self.ib is not None and self.ib.isConnected()
+
     def get_account_info(self) -> dict:
         """Get account information"""
         if self.dry_run:
@@ -652,15 +678,25 @@ class IBPaperTrader:
                 'BuyingPower': self.config.initial_capital * 4
             }
 
-        if not self.ib:
+        if not self.is_connected():
+            # Return cached data if disconnected
+            if self.cached_account:
+                return self.cached_account
             return {}
 
-        account_values = self.ib.accountValues()
-        info = {}
-        for av in account_values:
-            if av.tag in ['NetLiquidation', 'AvailableFunds', 'BuyingPower', 'TotalCashValue']:
-                info[av.tag] = float(av.value)
-        return info
+        try:
+            account_values = self.ib.accountValues()
+            info = {}
+            for av in account_values:
+                if av.tag in ['NetLiquidation', 'AvailableFunds', 'BuyingPower', 'TotalCashValue']:
+                    info[av.tag] = float(av.value)
+            # Cache the data
+            if info:
+                self.cached_account = info
+            return info
+        except Exception as e:
+            logger.warning(f"Error getting account info: {e}")
+            return self.cached_account if self.cached_account else {}
 
     def get_current_positions(self) -> Dict[str, dict]:
         """Get current positions from IB"""
@@ -1094,9 +1130,12 @@ class IBPaperTrader:
         total_pnl = 0
         daily_pnl_total = 0
 
-        if self.ib and self.ib.isConnected():
+        if self.is_connected():
             # Get portfolio with real-time values from IB
             portfolio = self.ib.portfolio()
+
+            # Cache portfolio for when disconnected
+            self.cached_portfolio = list(portfolio)
 
             for item in portfolio:
                 symbol = item.contract.symbol
@@ -1145,6 +1184,17 @@ class IBPaperTrader:
                 # Read cached PnL data (no new requests needed)
                 pnl_list = self.ib.pnl()
                 pnl_singles = self.ib.pnlSingle()
+
+                # Cache PnL data
+                self.cached_pnl_singles = list(pnl_singles)
+                if pnl_list:
+                    for pnl in pnl_list:
+                        if pnl.dailyPnL is not None:
+                            try:
+                                if not math.isnan(pnl.dailyPnL):
+                                    self.cached_pnl_total = pnl.dailyPnL
+                            except:
+                                pass
 
                 # Get total daily P&L from account
                 if pnl_list:
@@ -1213,6 +1263,55 @@ class IBPaperTrader:
                     'pnl_value': pnl_value,
                     'daily_str': "N/A"
                 })
+        elif self.cached_portfolio:
+            # Disconnected - use cached data
+            import math
+            for item in self.cached_portfolio:
+                symbol = item.contract.symbol
+                quantity = item.position
+                entry_price = item.averageCost
+                market_value = item.marketValue
+                unrealized_pnl = item.unrealizedPNL
+
+                if quantity != 0:
+                    current_price = abs(market_value / quantity)
+                else:
+                    current_price = entry_price
+
+                if quantity > 0:
+                    pnl_pct = (unrealized_pnl / (entry_price * quantity)) * 100 if entry_price * quantity != 0 else 0
+                    pos_type = "LONG"
+                else:
+                    pnl_pct = (unrealized_pnl / (entry_price * abs(quantity))) * 100 if entry_price * abs(quantity) != 0 else 0
+                    pos_type = "SHORT"
+
+                total_pnl += unrealized_pnl
+                daily_str = "N/A"
+
+                # Try to get daily P&L from cached data
+                if self.cached_pnl_singles:
+                    for p in self.cached_pnl_singles:
+                        if p.conId == item.contract.conId and p.dailyPnL is not None:
+                            try:
+                                if not math.isnan(p.dailyPnL):
+                                    daily_str = f"${p.dailyPnL:>+,.0f}"
+                            except:
+                                pass
+                            break
+
+                position_data.append({
+                    'symbol': symbol,
+                    'pos_type': pos_type,
+                    'quantity': quantity,
+                    'entry_price': entry_price,
+                    'current_price': current_price,
+                    'pnl_pct': pnl_pct,
+                    'pnl_value': unrealized_pnl,
+                    'daily_str': daily_str
+                })
+
+            # Use cached total daily P&L
+            daily_pnl_total = self.cached_pnl_total
 
         # Now print everything at once (no IB calls during print)
         print("\n" + "="*90)
@@ -1220,7 +1319,9 @@ class IBPaperTrader:
         print("="*90)
 
         # Market data warning
-        if market_data_type == "DELAYED":
+        if not self.is_connected() and self.cached_portfolio:
+            print("\n[!] DISCONNECTED - Zeige cached Daten (letzte bekannte Werte)")
+        elif market_data_type == "DELAYED":
             print("\n[!] WARNUNG: VERZOEGERTE DATEN (15-20 Min) - Preise nicht aktuell!")
         elif market_data_type == "LIVE":
             print(f"\n[OK] Market Data: LIVE (Echtzeit)")
@@ -1325,6 +1426,34 @@ class IBPaperTrader:
             mins_until_close = int((market_close - now_et).total_seconds() / 60)
             return True, f"Market OPEN - Closes in {mins_until_close} min @ {market_close_berlin.strftime('%H:%M Berlin')} ({market_close.strftime('%H:%M ET')})"
 
+    def _minutes_to_market_open(self) -> Optional[int]:
+        """Calculate minutes until next market open"""
+        try:
+            et = ZoneInfo("America/New_York")
+            now_et = datetime.now(et)
+            weekday = now_et.weekday()
+
+            # Calculate next market open
+            if weekday >= 5:  # Weekend
+                days_until = 7 - weekday
+                next_open = now_et + timedelta(days=days_until)
+            else:
+                market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+                if now_et >= market_open.replace(hour=16):  # After close
+                    next_open = now_et + timedelta(days=1)
+                    if next_open.weekday() >= 5:
+                        next_open += timedelta(days=(7 - next_open.weekday()))
+                elif now_et < market_open:  # Before open
+                    next_open = market_open
+                else:  # Market is open
+                    return 0
+
+            next_open = next_open.replace(hour=9, minute=30, second=0, microsecond=0)
+            mins = int((next_open - now_et).total_seconds() / 60)
+            return max(0, mins)
+        except:
+            return None
+
     def run(self, force: bool = False):
         """Main trading loop"""
         logger.info("Starting Supertrend Paper Trader...")
@@ -1333,9 +1462,37 @@ class IBPaperTrader:
             logger.error("Could not connect. Exiting.")
             return
 
+        reconnect_attempts = 0
+        max_reconnect_attempts = 5
+
         try:
             while True:
                 try:
+                    # Check connection and reconnect if needed
+                    if not self.is_connected():
+                        # Only reconnect if within 15 min of market open or market is open
+                        is_open, status = self.is_market_open()
+                        mins_to_open = self._minutes_to_market_open()
+
+                        if is_open or (mins_to_open is not None and mins_to_open <= 15):
+                            logger.warning("Connection lost! Attempting to reconnect...")
+                            if reconnect_attempts < max_reconnect_attempts:
+                                if self.reconnect():
+                                    logger.info("Reconnected successfully!")
+                                    reconnect_attempts = 0
+                                else:
+                                    reconnect_attempts += 1
+                                    logger.error(f"Reconnect failed ({reconnect_attempts}/{max_reconnect_attempts})")
+                                    time.sleep(30)  # Wait before next attempt
+                                    continue
+                            else:
+                                logger.error("Max reconnect attempts reached. Showing cached data...")
+                                reconnect_attempts = 0
+                                time.sleep(60)
+                        else:
+                            # Outside trading hours, show cached data and wait
+                            logger.info(f"Disconnected. Reconnect in {mins_to_open - 15 if mins_to_open else '?'} min (15 min before market open)")
+
                     # Check market hours
                     is_open, status = self.is_market_open()
                     print(f"\n>>> {status}")
@@ -1351,8 +1508,9 @@ class IBPaperTrader:
                     # Update signals
                     self.update_signals()
 
-                    # Execute signals
-                    self.execute_signals()
+                    # Execute signals (only if connected)
+                    if self.is_connected():
+                        self.execute_signals()
 
                     # Show status
                     self.show_status()
@@ -1366,6 +1524,9 @@ class IBPaperTrader:
                     break
                 except Exception as e:
                     logger.error(f"Error in main loop: {e}")
+                    # Check if it's a connection error
+                    if "disconnect" in str(e).lower() or "connection" in str(e).lower():
+                        logger.warning("Connection error detected, will try to reconnect...")
                     time.sleep(60)
 
         finally:
