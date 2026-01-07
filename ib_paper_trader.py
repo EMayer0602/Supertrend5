@@ -1112,60 +1112,61 @@ class IBPaperTrader:
                     'daily_str': daily_str
                 })
 
-            # Get daily P&L - try multiple methods
+            # Get daily P&L - request all at once, wait for all data
+            import math
             try:
                 account_id = self.ib.managedAccounts()[0] if self.ib.managedAccounts() else ''
-                if account_id:
-                    # Method 1: reqPnL for total account P&L
+                if account_id and portfolio:
+                    # Request PnL for all positions at once
                     self.ib.reqPnL(account_id, '')
-                    self.ib.sleep(1)
+                    for item in portfolio:
+                        self.ib.reqPnLSingle(account_id, '', item.contract.conId)
 
+                    # Wait and poll until we have all data (max 3 seconds)
+                    num_positions = len(portfolio)
+                    for _ in range(6):  # 6 x 0.5s = 3 seconds max
+                        self.ib.sleep(0.5)
+                        pnl_singles = self.ib.pnlSingle()
+                        if len(pnl_singles) >= num_positions:
+                            break
+
+                    # Get total daily P&L from account
                     pnl_list = self.ib.pnl()
                     if pnl_list:
                         for pnl in pnl_list:
-                            if pnl.dailyPnL is not None:
+                            if pnl.dailyPnL is not None and not math.isnan(pnl.dailyPnL):
                                 daily_pnl_total = pnl.dailyPnL
                                 break
 
-                    # Method 2: reqPnLSingle for per-position daily P&L
-                    if portfolio:
-                        for item in portfolio:
-                            self.ib.reqPnLSingle(account_id, '', item.contract.conId)
+                    # Get per-position daily P&L
+                    daily_by_conid = {}
+                    for p in pnl_singles:
+                        if p.dailyPnL is not None:
+                            try:
+                                if not math.isnan(p.dailyPnL):
+                                    daily_by_conid[p.conId] = p.dailyPnL
+                            except:
+                                pass
 
-                        self.ib.sleep(1)  # Wait longer for data
+                    # Update position_data with daily P&L
+                    daily_sum = 0
+                    for i, item in enumerate(portfolio):
+                        conId = item.contract.conId
+                        if conId in daily_by_conid:
+                            daily_val = daily_by_conid[conId]
+                            if not math.isnan(daily_val):
+                                daily_sum += daily_val
+                                if i < len(position_data):
+                                    position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
 
-                        import math
-                        pnl_singles = self.ib.pnlSingle()
-                        # Filter out None and nan values
-                        daily_by_conid = {}
-                        for p in pnl_singles:
-                            if p.dailyPnL is not None:
-                                try:
-                                    if not math.isnan(p.dailyPnL):
-                                        daily_by_conid[p.conId] = p.dailyPnL
-                                except:
-                                    pass
+                    # Use sum if reqPnL didn't return valid total
+                    if (daily_pnl_total == 0 or math.isnan(daily_pnl_total)) and daily_sum != 0:
+                        daily_pnl_total = daily_sum
 
-                        # Update position_data with daily P&L and sum total
-                        daily_sum = 0
-                        for i, item in enumerate(portfolio):
-                            conId = item.contract.conId
-                            if conId in daily_by_conid:
-                                daily_val = daily_by_conid[conId]
-                                # Extra check for nan
-                                if daily_val is not None and not math.isnan(daily_val):
-                                    daily_sum += daily_val
-                                    if i < len(position_data):
-                                        position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
-
-                        # Use sum if reqPnL didn't return total
-                        if daily_pnl_total == 0 and daily_sum != 0:
-                            daily_pnl_total = daily_sum
-
-                        # Cancel all subscriptions
-                        self.ib.cancelPnL(account_id, '')
-                        for item in portfolio:
-                            self.ib.cancelPnLSingle(account_id, '', item.contract.conId)
+                    # Cancel all subscriptions
+                    self.ib.cancelPnL(account_id, '')
+                    for item in portfolio:
+                        self.ib.cancelPnLSingle(account_id, '', item.contract.conId)
             except Exception as e:
                 logger.debug(f"Could not get daily PnL: {e}")
         elif self.dry_run:
