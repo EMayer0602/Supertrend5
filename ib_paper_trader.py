@@ -573,6 +573,7 @@ class IBPaperTrader:
         self.ticker_strategies: Dict[str, str] = {}  # Track which strategy each ticker uses
         self.historical_data: Dict[str, pd.DataFrame] = {}
         self.trade_log: List[dict] = []
+        self.pnl_subscribed: bool = False  # Track if PnL subscriptions are active
 
         # Load existing state
         self._load_state()
@@ -610,10 +611,31 @@ class IBPaperTrader:
             else:
                 logger.info(f"Market Data Type: {mdt}")
 
+            # Subscribe to PnL updates
+            self._subscribe_pnl()
+
             return True
         except Exception as e:
             logger.error(f"Failed to connect to IB: {e}")
             return False
+
+    def _subscribe_pnl(self):
+        """Subscribe to PnL updates for all positions"""
+        if not self.ib or self.pnl_subscribed:
+            return
+        try:
+            account_id = self.ib.managedAccounts()[0] if self.ib.managedAccounts() else ''
+            if account_id:
+                # Subscribe to total account PnL
+                self.ib.reqPnL(account_id, '')
+                # Subscribe to PnL for each position
+                portfolio = self.ib.portfolio()
+                for item in portfolio:
+                    self.ib.reqPnLSingle(account_id, '', item.contract.conId)
+                self.pnl_subscribed = True
+                logger.info(f"Subscribed to PnL updates for {len(portfolio)} positions")
+        except Exception as e:
+            logger.warning(f"Could not subscribe to PnL: {e}")
 
     def disconnect(self):
         """Disconnect from IB"""
@@ -1112,61 +1134,56 @@ class IBPaperTrader:
                     'daily_str': daily_str
                 })
 
-            # Get daily P&L - request all at once, wait for all data
+            # Get daily P&L from cached subscriptions (subscribed at connect)
             import math
             try:
-                account_id = self.ib.managedAccounts()[0] if self.ib.managedAccounts() else ''
-                if account_id and portfolio:
-                    # Request PnL for all positions at once
-                    self.ib.reqPnL(account_id, '')
-                    for item in portfolio:
-                        self.ib.reqPnLSingle(account_id, '', item.contract.conId)
+                # Make sure PnL is subscribed
+                if not self.pnl_subscribed:
+                    self._subscribe_pnl()
+                    self.ib.sleep(2)  # Wait for initial data
 
-                    # Wait and poll until we have all data (max 5 seconds)
-                    num_positions = len(portfolio)
-                    for _ in range(10):  # 10 x 0.5s = 5 seconds max
-                        self.ib.sleep(0.5)
-                        pnl_singles = self.ib.pnlSingle()
-                        if len(pnl_singles) >= num_positions:
-                            break
+                # Read cached PnL data (no new requests needed)
+                pnl_list = self.ib.pnl()
+                pnl_singles = self.ib.pnlSingle()
 
-                    # Get total daily P&L from account
-                    pnl_list = self.ib.pnl()
-                    if pnl_list:
-                        for pnl in pnl_list:
-                            if pnl.dailyPnL is not None and not math.isnan(pnl.dailyPnL):
-                                daily_pnl_total = pnl.dailyPnL
-                                break
-
-                    # Get per-position daily P&L
-                    daily_by_conid = {}
-                    for p in pnl_singles:
-                        if p.dailyPnL is not None:
+                # Get total daily P&L from account
+                if pnl_list:
+                    for pnl in pnl_list:
+                        if pnl.dailyPnL is not None:
                             try:
-                                if not math.isnan(p.dailyPnL):
-                                    daily_by_conid[p.conId] = p.dailyPnL
+                                if not math.isnan(pnl.dailyPnL):
+                                    daily_pnl_total = pnl.dailyPnL
+                                    break
                             except:
                                 pass
 
-                    # Update position_data with daily P&L
-                    daily_sum = 0
-                    for i, item in enumerate(portfolio):
-                        conId = item.contract.conId
-                        if conId in daily_by_conid:
-                            daily_val = daily_by_conid[conId]
+                # Get per-position daily P&L
+                daily_by_conid = {}
+                for p in pnl_singles:
+                    if p.dailyPnL is not None:
+                        try:
+                            if not math.isnan(p.dailyPnL):
+                                daily_by_conid[p.conId] = p.dailyPnL
+                        except:
+                            pass
+
+                # Update position_data with daily P&L
+                daily_sum = 0
+                for i, item in enumerate(portfolio):
+                    conId = item.contract.conId
+                    if conId in daily_by_conid:
+                        daily_val = daily_by_conid[conId]
+                        try:
                             if not math.isnan(daily_val):
                                 daily_sum += daily_val
                                 if i < len(position_data):
                                     position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
+                        except:
+                            pass
 
-                    # Use sum if reqPnL didn't return valid total
-                    if (daily_pnl_total == 0 or math.isnan(daily_pnl_total)) and daily_sum != 0:
-                        daily_pnl_total = daily_sum
-
-                    # Cancel all subscriptions
-                    self.ib.cancelPnL(account_id, '')
-                    for item in portfolio:
-                        self.ib.cancelPnLSingle(account_id, '', item.contract.conId)
+                # Use sum if reqPnL didn't return valid total
+                if daily_pnl_total == 0 and daily_sum != 0:
+                    daily_pnl_total = daily_sum
             except Exception as e:
                 logger.debug(f"Could not get daily PnL: {e}")
         elif self.dry_run:
