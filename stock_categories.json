@@ -1,9 +1,9 @@
 {
-    "_comment": "Stock categories for multi-strategy trading. Edit manually or run categorize_stocks.py",
-    "_last_updated": "2026-01-07 14:15",
+    "_comment": "Stock categories - Top 10 per strategy based on backtest",
+    "_last_updated": "2026-01-07 14:30",
     "strategies": {
         "SUPERTREND": {
-            "description": "Volatile/sideways stocks where Supertrend beats Buy&Hold",
+            "description": "Stocks where Supertrend beats Buy&Hold",
             "settings": {
                 "st_period": 15,
                 "st_multiplier": 4.0,
@@ -11,69 +11,43 @@
                 "trailing_stop_pct": 0.12
             },
             "tickers": [
-                "NFLX",
+                "PDYN",
+                "QBTS",
                 "MRNA",
                 "PYPL",
-                "NKE",
-                "TGT",
                 "PFE",
-                "UNH",
+                "NKE",
                 "MRK",
-                "ZM",
-                "ADBE",
-                "BA",
-                "DIS",
-                "SNAP",
-                "DOCU",
-                "PINS",
-                "RBLX",
-                "ROKU",
-                "ARKK",
-                "DKNG",
-                "SBUX"
+                "TGT",
+                "UNH",
+                "NFLX"
             ]
         },
         "BUY_HOLD": {
-            "description": "Strong uptrends - Buy and hold with trailing stop only",
+            "description": "Strong bull-runs - Buy and hold with trailing stop",
             "settings": {
                 "trailing_stop_pct": 0.15,
                 "buy_on_dip_pct": 0.05
             },
             "tickers": [
-                "NVDA",
                 "PLTR",
+                "NVDA",
                 "MSTR",
+                "QUBT",
                 "COIN",
                 "AVGO",
-                "CRWD",
-                "SHOP",
-                "AMD",
-                "TSLA",
+                "MU",
                 "META",
-                "UBER",
-                "LLY",
-                "WMT",
-                "COST",
-                "HD",
-                "KO",
-                "MA",
-                "MCD",
-                "V",
-                "LOW",
-                "ABBV",
-                "ARM",
-                "SNOW",
-                "CRM",
-                "SMCI"
+                "CRWD",
+                "SHOP"
             ]
         },
         "TREND_FOLLOW": {
-            "description": "ETFs and stable stocks - EMA crossover strategy",
+            "description": "ETFs - EMA crossover strategy",
             "settings": {
                 "ema_fast": 20,
                 "ema_slow": 50,
-                "atr_multiplier": 2.0,
-                "min_trend_strength": 0.6
+                "atr_multiplier": 2.0
             },
             "tickers": [
                 "SPY",
@@ -83,26 +57,41 @@
             ]
         },
         "MOMENTUM": {
-            "description": "Extreme bull-runs - Ride momentum, exit on weakness",
+            "description": "Reserved for momentum plays",
             "settings": {
                 "rsi_period": 14,
-                "rsi_overbought": 80,
-                "momentum_period": 20,
-                "volume_factor": 1.5
+                "rsi_overbought": 80
             },
             "tickers": []
         },
         "EXCLUDED": {
-            "description": "Stocks to exclude from trading (delisted, too illiquid, etc.)",
+            "description": "Excluded stocks",
             "tickers": [
                 "WBA",
                 "SQ",
                 "PG"
             ]
+        },
+        "GERMAN": {
+            "description": "German stocks (IBIS exchange) - use SMART routing in IB",
+            "settings": {
+                "st_period": 15,
+                "st_multiplier": 4.0,
+                "exchange": "SMART",
+                "currency": "EUR"
+            },
+            "tickers": [
+                "TKMS"
+            ]
         }
     },
     "watchlist": {
-        "description": "Stocks to analyze but not trade yet",
-        "tickers": []
+        "description": "Stocks to monitor",
+        "tickers": [
+            "DRH",
+            "TSLA",
+            "AMD",
+            "UBER"
+        ]
     }
 }
