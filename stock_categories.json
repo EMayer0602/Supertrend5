@@ -24,10 +24,10 @@
             ]
         },
         "BUY_HOLD": {
-            "description": "Strong bull-runs - Buy and hold with trailing stop",
+            "description": "Strong bull-runs - Buy and hold with trailing stop + re-entry",
             "settings": {
-                "trailing_stop_pct": 0.15,
-                "buy_on_dip_pct": 0.05
+                "trailing_stop_pct": 0.20,
+                "reentry_after_days": 5
             },
             "tickers": [
                 "PLTR",
