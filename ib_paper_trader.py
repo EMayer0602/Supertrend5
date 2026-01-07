@@ -312,12 +312,11 @@ def get_trend_follow_signal(df: pd.DataFrame) -> str:
     current = df['trend_follow_signal'].iloc[-1]
     prev = df['trend_follow_signal'].iloc[-2]
 
-    if current == 1 and prev == -1:
+    if current == 1:
+        # Uptrend - want to be long (BUY if no position)
         return "BUY"
     elif current == -1 and prev == 1:
         return "SELL"
-    elif current == 1:
-        return "HOLD_LONG"
     else:
         return "HOLD_SHORT"
 
@@ -399,13 +398,13 @@ def apply_buy_hold_strategy(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_buy_hold_signal(df: pd.DataFrame) -> str:
-    """Get signal from BUY_HOLD strategy - always hold long"""
+    """Get signal from BUY_HOLD strategy - always want to be long"""
     if len(df) < 2 or 'buy_hold_signal' not in df.columns:
         return "HOLD"
 
     # BUY_HOLD: Always want to be long
-    # Only exit via trailing stop (not via signal)
-    return "HOLD_LONG"
+    # Return BUY so system opens position if not already in
+    return "BUY"
 
 
 def get_signal_for_strategy(df: pd.DataFrame, strategy: str) -> str:
