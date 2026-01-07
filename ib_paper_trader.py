@@ -1134,8 +1134,17 @@ class IBPaperTrader:
 
                         self.ib.sleep(1)  # Wait longer for data
 
+                        import math
                         pnl_singles = self.ib.pnlSingle()
-                        daily_by_conid = {p.conId: p.dailyPnL for p in pnl_singles if p.dailyPnL is not None}
+                        # Filter out None and nan values
+                        daily_by_conid = {}
+                        for p in pnl_singles:
+                            if p.dailyPnL is not None:
+                                try:
+                                    if not math.isnan(p.dailyPnL):
+                                        daily_by_conid[p.conId] = p.dailyPnL
+                                except:
+                                    pass
 
                         # Update position_data with daily P&L and sum total
                         daily_sum = 0
@@ -1143,9 +1152,11 @@ class IBPaperTrader:
                             conId = item.contract.conId
                             if conId in daily_by_conid:
                                 daily_val = daily_by_conid[conId]
-                                daily_sum += daily_val
-                                if i < len(position_data):
-                                    position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
+                                # Extra check for nan
+                                if daily_val is not None and not math.isnan(daily_val):
+                                    daily_sum += daily_val
+                                    if i < len(position_data):
+                                        position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
 
                         # Use sum if reqPnL didn't return total
                         if daily_pnl_total == 0 and daily_sum != 0:
