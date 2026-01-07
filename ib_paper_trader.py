@@ -933,33 +933,29 @@ class IBPaperTrader:
 
     def show_status(self):
         """Show current portfolio status with daily P&L"""
-        print("\n" + "="*90)
-        print("MULTI-STRATEGY PAPER TRADING STATUS")
-        print("="*90)
+        import logging
 
-        # Show strategy breakdown
+        # Temporarily disable IB logging to prevent interrupting output
+        ib_logger = logging.getLogger('ib_insync')
+        old_level = ib_logger.level
+        ib_logger.setLevel(logging.WARNING)
+
+        # Also suppress our own logger during display
+        logger.setLevel(logging.WARNING)
+
+        # Collect all data first
         stocks_by_strat = get_stocks_by_strategy()
         strat_counts = {s: len(t) for s, t in stocks_by_strat.items()}
-        print(f"\nStrategies: " + " | ".join([f"{s}: {c}" for s, c in strat_counts.items()]))
-
-        # Account info
         account = self.get_account_info()
-        print(f"\nAccount Value: ${account.get('NetLiquidation', 0):,.2f}")
-        print(f"Available Funds: ${account.get('AvailableFunds', 0):,.2f}")
-
-        # Positions
         positions = self.get_current_positions()
-        print(f"\nOpen Positions: {len(positions)}/{self.config.max_positions}")
-        print("-"*90)
-        print(f"  {'Symbol':<6} | {'Type':<5} | {'Qty':>6} | {'Entry':>10} | {'Current':>10} | {'Total P/L':>12} | {'Daily P/L':>10}")
-        print("-"*90)
 
+        # Collect position data
+        position_data = []
         total_pnl = 0
         daily_pnl_total = 0
 
         if positions:
             for symbol, pos in positions.items():
-                # Get current price from IB
                 current_price = self.get_current_price(symbol)
                 if current_price is None:
                     current_price = pos['avg_cost']
@@ -967,21 +963,17 @@ class IBPaperTrader:
                 entry_price = pos['avg_cost']
                 quantity = pos['quantity']
 
-                # Calculate P/L correctly for long and short positions
                 if quantity > 0:
-                    # Long position
                     pnl_pct = (current_price - entry_price) / entry_price * 100
                     pnl_value = (current_price - entry_price) * quantity
                     pos_type = "LONG"
                 else:
-                    # Short position (negative quantity)
                     pnl_pct = (entry_price - current_price) / entry_price * 100
                     pnl_value = (entry_price - current_price) * abs(quantity)
                     pos_type = "SHORT"
 
                 total_pnl += pnl_value
 
-                # Daily P&L
                 daily_change = self.get_daily_pnl(symbol)
                 if daily_change is not None:
                     daily_pnl = daily_change * abs(quantity)
@@ -990,13 +982,40 @@ class IBPaperTrader:
                 else:
                     daily_str = "N/A"
 
-                print(f"  {symbol:<6} | {pos_type:<5} | {quantity:>6.0f} | ${entry_price:>8.2f} | "
-                      f"${current_price:>8.2f} | {pnl_pct:>+5.1f}% ${pnl_value:>+6,.0f} | {daily_str:>10}")
+                position_data.append({
+                    'symbol': symbol,
+                    'pos_type': pos_type,
+                    'quantity': quantity,
+                    'entry_price': entry_price,
+                    'current_price': current_price,
+                    'pnl_pct': pnl_pct,
+                    'pnl_value': pnl_value,
+                    'daily_str': daily_str
+                })
+
+        # Now print everything at once (no IB calls during print)
+        print("\n" + "="*90)
+        print("MULTI-STRATEGY PAPER TRADING STATUS")
+        print("="*90)
+
+        print(f"\nStrategies: " + " | ".join([f"{s}: {c}" for s, c in strat_counts.items()]))
+        print(f"\nAccount Value: ${account.get('NetLiquidation', 0):,.2f}")
+        print(f"Available Funds: ${account.get('AvailableFunds', 0):,.2f}")
+
+        print(f"\nOpen Positions: {len(positions)}/{self.config.max_positions}")
+        print("-"*90)
+        print(f"  {'Symbol':<6} | {'Type':<5} | {'Qty':>6} | {'Entry':>10} | {'Current':>10} | {'Total P/L':>12} | {'Daily P/L':>10}")
+        print("-"*90)
+
+        if position_data:
+            for p in position_data:
+                print(f"  {p['symbol']:<6} | {p['pos_type']:<5} | {p['quantity']:>6.0f} | ${p['entry_price']:>8.2f} | "
+                      f"${p['current_price']:>8.2f} | {p['pnl_pct']:>+5.1f}% ${p['pnl_value']:>+6,.0f} | {p['daily_str']:>10}")
 
             print("-"*90)
             print(f"  {'TOTAL:':<52} ${total_pnl:>+10,.0f} | ${daily_pnl_total:>+10,.0f}")
-            print(f"\n  📈 Total P/L:  ${total_pnl:>+,.0f}")
-            print(f"  📅 Daily P/L:  ${daily_pnl_total:>+,.0f}")
+            print(f"\n  Total P/L:  ${total_pnl:>+,.0f}")
+            print(f"  Daily P/L:  ${daily_pnl_total:>+,.0f}")
         else:
             print("  No open positions")
 
@@ -1012,7 +1031,11 @@ class IBPaperTrader:
         if sell_signals:
             print(f"  SELL: {', '.join(sell_signals)}")
 
-        print("="*80 + "\n")
+        print("="*90 + "\n")
+
+        # Restore logging levels
+        ib_logger.setLevel(old_level)
+        logger.setLevel(logging.INFO)
 
     def is_market_open(self) -> Tuple[bool, str]:
         """
