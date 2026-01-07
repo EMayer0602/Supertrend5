@@ -234,15 +234,15 @@ def get_supertrend_signal(df: pd.DataFrame) -> str:
     current_dir = df['st_direction'].iloc[-1]
     prev_dir = df['st_direction'].iloc[-2]
 
-    # Signal on direction change
-    if current_dir == 1 and prev_dir == -1:
+    # Signal based on current direction
+    if current_dir == 1:
+        # Uptrend - want to be long
         return "BUY"
-    elif current_dir == -1 and prev_dir == 1:
+    elif current_dir == -1:
+        # Downtrend - exit/short
         return "SELL"
-    elif current_dir == 1:
-        return "HOLD_LONG"
     else:
-        return "HOLD_SHORT"
+        return "HOLD"
 
 
 # Alias for backward compatibility
