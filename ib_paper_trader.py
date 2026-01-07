@@ -1112,23 +1112,34 @@ class IBPaperTrader:
                     'daily_str': daily_str
                 })
 
-            # Get daily P&L from account summary
+            # Get daily P&L using reqPnLSingle for each position
             try:
                 account_id = self.ib.managedAccounts()[0] if self.ib.managedAccounts() else ''
-                if account_id:
-                    # Request account summary for daily PnL
-                    tags = 'DailyPnL'
-                    summary = self.ib.accountSummary(account_id)
-                    for item in summary:
-                        if item.tag == 'DailyPnL':
-                            try:
-                                daily_pnl_total = float(item.value)
-                            except:
-                                daily_pnl_total = 0
-                            break
+                if account_id and portfolio:
+                    # Request PnL for all positions at once
+                    for item in portfolio:
+                        self.ib.reqPnLSingle(account_id, '', item.contract.conId)
+
+                    self.ib.sleep(0.5)  # Wait for all PnL data
+
+                    # Read PnL data
+                    pnl_singles = self.ib.pnlSingle()
+                    daily_by_conid = {p.conId: p.dailyPnL for p in pnl_singles if p.dailyPnL is not None}
+
+                    # Update position_data with daily P&L
+                    for i, item in enumerate(portfolio):
+                        conId = item.contract.conId
+                        if conId in daily_by_conid:
+                            daily_val = daily_by_conid[conId]
+                            daily_pnl_total += daily_val
+                            if i < len(position_data):
+                                position_data[i]['daily_str'] = f"${daily_val:>+,.0f}"
+
+                    # Cancel all subscriptions
+                    for item in portfolio:
+                        self.ib.cancelPnLSingle(account_id, '', item.contract.conId)
             except Exception as e:
                 logger.debug(f"Could not get daily PnL: {e}")
-                daily_pnl_total = 0
         elif self.dry_run:
             # Dry run mode - use stored positions
             positions = self.positions
