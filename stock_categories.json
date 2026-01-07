@@ -17,7 +17,8 @@
                 "PDYN",
                 "PFE",
                 "PYPL",
-                "QBTS"
+                "QBTS",
+                "TKMS"
             ]
         },
         "KAMA": {
@@ -81,13 +82,19 @@
             ]
         },
         "EXCLUDED": {
-            "description": "Excluded stocks (delisted, special handling needed)",
+            "description": "Excluded stocks (delisted, not tradeable)",
             "tickers": [
                 "WBA",
                 "SQ",
-                "PG",
-                "TKMS"
+                "PG"
             ]
+        }
+    },
+    "ticker_settings": {
+        "_comment": "Per-ticker overrides for exchange and currency",
+        "TKMS": {
+            "exchange": "IBIS",
+            "currency": "EUR"
         }
     },
     "watchlist": {

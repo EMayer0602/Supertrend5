@@ -140,6 +140,19 @@ def get_ticker_strategy(ticker: str) -> str:
     return "SUPERTREND"  # Default
 
 
+def get_ticker_contract_params(ticker: str) -> tuple:
+    """Get exchange and currency for a ticker (default: SMART, USD)"""
+    config = load_stock_categories()
+    if config:
+        ticker_settings = config.get('ticker_settings', {})
+        if ticker in ticker_settings:
+            settings = ticker_settings[ticker]
+            exchange = settings.get('exchange', 'SMART')
+            currency = settings.get('currency', 'USD')
+            return (exchange, currency)
+    return ('SMART', 'USD')
+
+
 # =============================================================================
 # INDICATOR CALCULATIONS
 # =============================================================================
@@ -675,7 +688,8 @@ class IBPaperTrader:
             return None
 
         try:
-            contract = Stock(symbol, 'SMART', 'USD')
+            exchange, currency = get_ticker_contract_params(symbol)
+            contract = Stock(symbol, exchange, currency)
             self.ib.qualifyContracts(contract)
 
             bars = self.ib.reqHistoricalData(
@@ -739,7 +753,8 @@ class IBPaperTrader:
             return False
 
         try:
-            contract = Stock(symbol, 'SMART', 'USD')
+            exchange, currency = get_ticker_contract_params(symbol)
+            contract = Stock(symbol, exchange, currency)
             self.ib.qualifyContracts(contract)
 
             # Get bid/ask for mid-price limit order
@@ -934,7 +949,8 @@ class IBPaperTrader:
             return None
 
         try:
-            contract = Stock(symbol, 'SMART', 'USD')
+            exchange, currency = get_ticker_contract_params(symbol)
+            contract = Stock(symbol, exchange, currency)
             self.ib.qualifyContracts(contract)
             ticker = self.ib.reqMktData(contract, '', False, False)
             self.ib.sleep(1)  # Wait for data
@@ -967,7 +983,8 @@ class IBPaperTrader:
         if not self.ib:
             return None
         try:
-            contract = Stock(symbol, 'SMART', 'USD')
+            exchange, currency = get_ticker_contract_params(symbol)
+            contract = Stock(symbol, exchange, currency)
             self.ib.qualifyContracts(contract)
             ticker = self.ib.reqMktData(contract)
             self.ib.sleep(1)
