@@ -378,6 +378,36 @@ def get_momentum_signal(df: pd.DataFrame) -> str:
         return "HOLD_SHORT"
 
 
+def apply_buy_hold_strategy(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    BUY_HOLD Strategy for strong uptrends
+    - Always long, use trailing stop for protection
+    - Buy on dips (optional), hold until trailing stop hit
+    """
+    close = df['close'].values
+
+    # Simple: always bullish signal (buy and hold)
+    # Exit only via trailing stop (handled separately)
+    df['buy_hold_signal'] = 1  # Always long
+
+    # Track if we're in a dip (5% below recent high) for entry timing
+    rolling_high = pd.Series(close).rolling(20).max().values
+    dip_pct = (rolling_high - close) / rolling_high
+    df['in_dip'] = dip_pct > 0.05
+
+    return df
+
+
+def get_buy_hold_signal(df: pd.DataFrame) -> str:
+    """Get signal from BUY_HOLD strategy - always hold long"""
+    if len(df) < 2 or 'buy_hold_signal' not in df.columns:
+        return "HOLD"
+
+    # BUY_HOLD: Always want to be long
+    # Only exit via trailing stop (not via signal)
+    return "HOLD_LONG"
+
+
 def get_signal_for_strategy(df: pd.DataFrame, strategy: str) -> str:
     """Get trading signal based on strategy type"""
     if strategy == "SUPERTREND":
@@ -389,6 +419,9 @@ def get_signal_for_strategy(df: pd.DataFrame, strategy: str) -> str:
     elif strategy == "MOMENTUM":
         df = apply_momentum_strategy(df)
         return get_momentum_signal(df)
+    elif strategy == "BUY_HOLD":
+        df = apply_buy_hold_strategy(df)
+        return get_buy_hold_signal(df)
     else:
         # Default to Supertrend
         df = calculate_supertrend(df)
