@@ -647,22 +647,29 @@ class IBPaperTrader:
         """
         try:
             et = ZoneInfo("America/New_York")
+            berlin = ZoneInfo("Europe/Berlin")
         except Exception:
             # Fallback if timezone not available
             logger.warning("Could not load timezone, assuming market is open")
             return True, "Timezone unavailable"
 
         now_et = datetime.now(et)
+        now_berlin = datetime.now(berlin)
         weekday = now_et.weekday()  # 0=Monday, 6=Sunday
 
         # Weekend check
         if weekday >= 5:
-            next_open = now_et + timedelta(days=(7 - weekday))
-            next_open = next_open.replace(hour=9, minute=30, second=0, microsecond=0)
-            return False, f"Weekend - Market opens {next_open.strftime('%A %H:%M ET')}"
+            next_open_et = now_et + timedelta(days=(7 - weekday))
+            next_open_et = next_open_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            next_open_berlin = next_open_et.astimezone(berlin)
+            return False, f"Weekend - Market opens {next_open_berlin.strftime('%A %H:%M Berlin')} ({next_open_et.strftime('%H:%M ET')})"
 
         market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
         market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        # Convert to Berlin time for display
+        market_open_berlin = market_open.astimezone(berlin)
+        market_close_berlin = market_close.astimezone(berlin)
 
         current_time = now_et.time()
         open_time = market_open.time()
@@ -670,15 +677,17 @@ class IBPaperTrader:
 
         if current_time < open_time:
             mins_until = int((market_open - now_et).total_seconds() / 60)
-            return False, f"Pre-market - Opens in {mins_until} minutes ({market_open.strftime('%H:%M ET')})"
+            return False, f"Pre-market - Opens in {mins_until} min @ {market_open_berlin.strftime('%H:%M Berlin')} ({market_open.strftime('%H:%M ET')})"
         elif current_time >= close_time:
-            next_open = now_et + timedelta(days=1)
-            if next_open.weekday() >= 5:
-                next_open += timedelta(days=(7 - next_open.weekday()))
-            return False, f"After-hours - Market closed. Opens {next_open.strftime('%A 09:30 ET')}"
+            next_open_et = now_et + timedelta(days=1)
+            if next_open_et.weekday() >= 5:
+                next_open_et += timedelta(days=(7 - next_open_et.weekday()))
+            next_open_et = next_open_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            next_open_berlin = next_open_et.astimezone(berlin)
+            return False, f"After-hours - Opens {next_open_berlin.strftime('%A %H:%M Berlin')} ({next_open_et.strftime('%H:%M ET')})"
         else:
             mins_until_close = int((market_close - now_et).total_seconds() / 60)
-            return True, f"Market OPEN - Closes in {mins_until_close} minutes ({market_close.strftime('%H:%M ET')})"
+            return True, f"Market OPEN - Closes in {mins_until_close} min @ {market_close_berlin.strftime('%H:%M Berlin')} ({market_close.strftime('%H:%M ET')})"
 
     def run(self, force: bool = False):
         """Main trading loop"""
