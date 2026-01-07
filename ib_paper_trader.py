@@ -586,12 +586,12 @@ class IBPaperTrader:
             # Check market data type
             mdt = self.check_market_data_type()
             if mdt == "LIVE":
-                logger.info(f"✅ Market Data: LIVE (real-time)")
+                logger.info(f"[OK] Market Data: LIVE (real-time)")
             elif mdt == "DELAYED":
-                logger.warning(f"⚠️  Market Data: DELAYED (15-20 min old!)")
-                logger.warning(f"⚠️  Trading mit verzögerten Daten ist riskant!")
+                logger.warning(f"[!] Market Data: DELAYED (15-20 min old!)")
+                logger.warning(f"[!] Trading mit verzoegerten Daten ist riskant!")
                 print("\n" + "!"*60)
-                print("!!! WARNUNG: VERZÖGERTE MARKTDATEN (15-20 Min) !!!")
+                print("!!! WARNUNG: VERZOEGERTE MARKTDATEN (15-20 Min) !!!")
                 print("!!! Preise sind NICHT aktuell - Trading ist riskant !!!")
                 print("!"*60 + "\n")
             else:
@@ -942,7 +942,7 @@ class IBPaperTrader:
             # Check if delayed
             if hasattr(ticker, 'marketDataType') and ticker.marketDataType == 3:
                 if not hasattr(self, '_delayed_warning_shown'):
-                    logger.warning(f"⚠️  DELAYED DATA detected for {symbol}! Prices are 15-20 min old!")
+                    logger.warning(f"[!] DELAYED DATA detected for {symbol}! Prices are 15-20 min old!")
                     self._delayed_warning_shown = True
 
             # Try different price fields
@@ -1052,9 +1052,9 @@ class IBPaperTrader:
 
         # Market data warning
         if market_data_type == "DELAYED":
-            print("\n⚠️  WARNUNG: VERZÖGERTE DATEN (15-20 Min) - Preise nicht aktuell!")
+            print("\n[!] WARNUNG: VERZOEGERTE DATEN (15-20 Min) - Preise nicht aktuell!")
         elif market_data_type == "LIVE":
-            print(f"\n✅ Market Data: LIVE (Echtzeit)")
+            print(f"\n[OK] Market Data: LIVE (Echtzeit)")
         else:
             print(f"\nMarket Data: {market_data_type}")
 

@@ -80,24 +80,13 @@
                 "QQQ"
             ]
         },
-        "GERMAN": {
-            "description": "German stocks (IBIS exchange) - Supertrend",
-            "settings": {
-                "st_period": 15,
-                "st_multiplier": 4.0,
-                "exchange": "SMART",
-                "currency": "EUR"
-            },
-            "tickers": [
-                "TKMS"
-            ]
-        },
         "EXCLUDED": {
-            "description": "Excluded stocks",
+            "description": "Excluded stocks (delisted, special handling needed)",
             "tickers": [
                 "WBA",
                 "SQ",
-                "PG"
+                "PG",
+                "TKMS"
             ]
         }
     },
