@@ -93,7 +93,7 @@
     "ticker_settings": {
         "_comment": "Per-ticker overrides for exchange and currency",
         "TKMS": {
-            "exchange": "IBIS",
+            "exchange": "SMART",
             "currency": "EUR"
         }
     },
