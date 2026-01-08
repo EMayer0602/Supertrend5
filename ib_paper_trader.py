@@ -65,15 +65,15 @@ class TradingConfig:
     # Portfolio Settings
     initial_capital: float = 100000.0  # $100k paper trading account
     max_position_pct: float = 0.05     # Max 5% per position
-    max_positions: int = 20            # Max 20 concurrent positions
+    max_positions: int = 30            # Max 30 concurrent positions
 
     # Supertrend Parameters (optimized from backtests)
     st_period: int = 15
     st_multiplier: float = 4.0
 
     # Risk Management
-    stop_loss_pct: float = 0.08        # 8% stop loss
-    trailing_stop_pct: float = 0.12    # 12% trailing stop
+    stop_loss_pct: float = 0.08        # 8% stop loss (from entry)
+    trailing_stop_pct: float = 0.12    # 12% trailing stop (from high)
 
     # Trading Rules
     trade_only_market_hours: bool = True
@@ -857,30 +857,48 @@ class IBPaperTrader:
             logger.error(f"Error placing order for {symbol}: {e}")
             return False
 
-    def check_stop_loss(self, symbol: str, current_price: float) -> bool:
-        """Check if stop loss is triggered"""
-        if symbol not in self.positions:
-            return False
+    def check_stop_loss(self, symbol: str, current_price: float, entry_price: float = None) -> bool:
+        """Check if stop loss is triggered using real IB position data"""
+        # Get entry price from IB positions if not provided
+        if entry_price is None:
+            current_positions = self.get_current_positions()
+            if symbol not in current_positions:
+                return False
+            entry_price = current_positions[symbol]['avg_cost']
 
-        pos = self.positions[symbol]
-        entry_price = pos['avg_cost']
-        highest_price = pos.get('highest_price', entry_price)
+        # Initialize tracking if not exists
+        if symbol not in self.positions:
+            self.positions[symbol] = {
+                'avg_cost': entry_price,
+                'highest_price': max(entry_price, current_price)
+            }
+
+        highest_price = self.positions[symbol].get('highest_price', entry_price)
 
         # Update highest price
         if current_price > highest_price:
             self.positions[symbol]['highest_price'] = current_price
             highest_price = current_price
 
-        # Check trailing stop
-        trailing_stop_price = highest_price * (1 - self.config.trailing_stop_pct)
+        # Get strategy-specific trailing stop
+        strategy = get_ticker_strategy(symbol)
+        config = load_stock_categories()
+        if config and 'strategies' in config and strategy in config['strategies']:
+            strat_settings = config['strategies'][strategy].get('settings', {})
+            trailing_stop_pct = strat_settings.get('trailing_stop_pct', self.config.trailing_stop_pct)
+        else:
+            trailing_stop_pct = self.config.trailing_stop_pct
+
+        # Check trailing stop (from highest price)
+        trailing_stop_price = highest_price * (1 - trailing_stop_pct)
         if current_price <= trailing_stop_price:
-            logger.warning(f"TRAILING STOP triggered for {symbol}: {current_price:.2f} <= {trailing_stop_price:.2f}")
+            logger.warning(f"TRAILING STOP triggered for {symbol}: ${current_price:.2f} <= ${trailing_stop_price:.2f} ({trailing_stop_pct*100:.0f}% from high ${highest_price:.2f})")
             return True
 
-        # Check fixed stop loss
+        # Check fixed stop loss (from entry - kills losers early!)
         stop_loss_price = entry_price * (1 - self.config.stop_loss_pct)
         if current_price <= stop_loss_price:
-            logger.warning(f"STOP LOSS triggered for {symbol}: {current_price:.2f} <= {stop_loss_price:.2f}")
+            logger.warning(f"STOP LOSS triggered for {symbol}: ${current_price:.2f} <= ${stop_loss_price:.2f} ({self.config.stop_loss_pct*100:.0f}% from entry ${entry_price:.2f})")
             return True
 
         return False
@@ -956,15 +974,17 @@ class IBPaperTrader:
             # SELL signal or stop loss
             elif has_position:
                 should_sell = False
+                pos_data = current_positions[symbol]
+                entry_price = pos_data['avg_cost']
 
                 if signal == "SELL":
                     logger.info(f"SELL SIGNAL: {symbol}")
                     should_sell = True
-                elif self.check_stop_loss(symbol, current_price):
+                elif self.check_stop_loss(symbol, current_price, entry_price):
                     should_sell = True
 
                 if should_sell:
-                    quantity = int(current_positions[symbol]['quantity'])
+                    quantity = int(pos_data['quantity'])
                     self.place_order(symbol, "SELL", quantity)
 
     def check_market_data_type(self) -> str:
