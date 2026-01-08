@@ -880,25 +880,27 @@ class IBPaperTrader:
             self.positions[symbol]['highest_price'] = current_price
             highest_price = current_price
 
-        # Get strategy-specific trailing stop
+        # Get strategy-specific stops (based on max drawdown + 1%)
         strategy = get_ticker_strategy(symbol)
         config = load_stock_categories()
         if config and 'strategies' in config and strategy in config['strategies']:
             strat_settings = config['strategies'][strategy].get('settings', {})
             trailing_stop_pct = strat_settings.get('trailing_stop_pct', self.config.trailing_stop_pct)
+            stop_loss_pct = strat_settings.get('stop_loss_pct', self.config.stop_loss_pct)
         else:
             trailing_stop_pct = self.config.trailing_stop_pct
+            stop_loss_pct = self.config.stop_loss_pct
 
-        # Check trailing stop (from highest price)
+        # Check trailing stop (from highest price - protects profits)
         trailing_stop_price = highest_price * (1 - trailing_stop_pct)
         if current_price <= trailing_stop_price:
-            logger.warning(f"TRAILING STOP triggered for {symbol}: ${current_price:.2f} <= ${trailing_stop_price:.2f} ({trailing_stop_pct*100:.0f}% from high ${highest_price:.2f})")
+            logger.warning(f"TRAILING STOP [{strategy}] {symbol}: ${current_price:.2f} <= ${trailing_stop_price:.2f} ({trailing_stop_pct*100:.0f}% from high ${highest_price:.2f})")
             return True
 
-        # Check fixed stop loss (from entry - kills losers early!)
-        stop_loss_price = entry_price * (1 - self.config.stop_loss_pct)
+        # Check fixed stop loss (from entry - based on max drawdown + 1%)
+        stop_loss_price = entry_price * (1 - stop_loss_pct)
         if current_price <= stop_loss_price:
-            logger.warning(f"STOP LOSS triggered for {symbol}: ${current_price:.2f} <= ${stop_loss_price:.2f} ({self.config.stop_loss_pct*100:.0f}% from entry ${entry_price:.2f})")
+            logger.warning(f"STOP LOSS [{strategy}] {symbol}: ${current_price:.2f} <= ${stop_loss_price:.2f} ({stop_loss_pct*100:.0f}% from entry ${entry_price:.2f})")
             return True
 
         return False

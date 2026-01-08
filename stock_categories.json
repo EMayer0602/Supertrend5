@@ -7,7 +7,8 @@
             "settings": {
                 "st_period": 15,
                 "st_multiplier": 4.0,
-                "trailing_stop_pct": 0.12
+                "trailing_stop_pct": 0.12,
+                "stop_loss_pct": 0.36
             },
             "tickers": [
                 "MRK",
@@ -26,7 +27,8 @@
             "settings": {
                 "kama_fast": 10,
                 "kama_slow": 30,
-                "trailing_stop_pct": 0.15
+                "trailing_stop_pct": 0.15,
+                "stop_loss_pct": 0.21
             },
             "tickers": [
                 "JNJ",
@@ -38,7 +40,8 @@
             "settings": {
                 "jma_fast": 7,
                 "jma_slow": 21,
-                "trailing_stop_pct": 0.15
+                "trailing_stop_pct": 0.15,
+                "stop_loss_pct": 0.22
             },
             "tickers": [
                 "UNH"
@@ -48,6 +51,7 @@
             "description": "Strong uptrends - no indicator beats B&H, use 20% trailing stop",
             "settings": {
                 "trailing_stop_pct": 0.20,
+                "stop_loss_pct": 0.26,
                 "reentry_after_days": 5
             },
             "tickers": [
@@ -74,7 +78,8 @@
             "settings": {
                 "kama_fast": 10,
                 "kama_slow": 30,
-                "trailing_stop_pct": 0.15
+                "trailing_stop_pct": 0.15,
+                "stop_loss_pct": 0.06
             },
             "tickers": [
                 "SPY",
