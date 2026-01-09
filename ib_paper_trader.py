@@ -724,15 +724,28 @@ class IBPaperTrader:
             }
         return positions
 
-    def fetch_historical_data(self, symbol: str, days: int = 60) -> Optional[pd.DataFrame]:
-        """Fetch historical data for a symbol"""
+    def fetch_historical_data(self, symbol: str, days: int = 60, timeout_sec: int = 30) -> Optional[pd.DataFrame]:
+        """Fetch historical data for a symbol with timeout protection"""
         if self.dry_run:
-            # Use yfinance for dry run
+            # Use yfinance for dry run with timeout protection
+            import concurrent.futures
             try:
                 import yfinance as yf
                 end = datetime.now()
                 start = end - timedelta(days=days)
-                df = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
+
+                # Use ThreadPoolExecutor for timeout
+                def download_data():
+                    return yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(download_data)
+                    try:
+                        df = future.result(timeout=timeout_sec)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f"Timeout fetching {symbol} after {timeout_sec}s")
+                        return None
+
                 if df.empty:
                     return None
 
@@ -764,7 +777,8 @@ class IBPaperTrader:
                 durationStr=f'{days} D',
                 barSizeSetting='1 day',
                 whatToShow='TRADES',
-                useRTH=True
+                useRTH=True,
+                timeout=timeout_sec  # Add timeout
             )
 
             if not bars:
@@ -920,14 +934,19 @@ class IBPaperTrader:
         # Get stocks grouped by strategy
         stocks_by_strategy = get_stocks_by_strategy()
         all_tickers = get_all_active_tickers()
+        total = len(all_tickers)
 
-        logger.info(f"Tracking {len(all_tickers)} stocks across {len(stocks_by_strategy)} strategies")
+        logger.info(f"Tracking {total} stocks across {len(stocks_by_strategy)} strategies")
 
-        for symbol in all_tickers:
+        for i, symbol in enumerate(all_tickers, 1):
             try:
+                # Show progress
+                print(f"    [{i}/{total}] Loading {symbol}...", end=" ", flush=True)
+
                 # Fetch data
                 df = self.fetch_historical_data(symbol, days=60)
                 if df is None or len(df) < 20:
+                    print("SKIP (no data)")
                     logger.warning(f"Insufficient data for {symbol}")
                     continue
 
@@ -945,11 +964,14 @@ class IBPaperTrader:
                 self.ticker_strategies[symbol] = strategy
 
                 current_price = df['close'].iloc[-1]
+                print(f"{signal} @ ${current_price:.2f}")
                 logger.info(f"{symbol} [{strategy}]: Price={current_price:.2f}, Signal={signal}")
 
             except Exception as e:
+                print(f"ERROR: {e}")
                 logger.error(f"Error updating signal for {symbol}: {e}")
 
+        print(f"    Signal update complete: {len(self.signals)}/{total} symbols")
         logger.info(f"Signal update complete for {len(self.signals)} symbols")
         self._save_state()
 
@@ -1539,7 +1561,8 @@ class IBPaperTrader:
                     # Show portfolio FIRST
                     self.show_status()
 
-                    print("\n>>> Loading signals for 41 symbols (this takes 1-2 minutes)...")
+                    all_tickers = get_all_active_tickers()
+                    print(f"\n>>> Loading signals for {len(all_tickers)} symbols (this takes 1-2 minutes)...")
 
                     # Update signals
                     self.update_signals()
@@ -1636,7 +1659,8 @@ def main():
         print(f"\n>>> {status}")
         # Show portfolio FIRST
         trader.show_status()
-        print("\n>>> Loading signals for 41 symbols (this takes 1-2 minutes)...")
+        all_tickers = get_all_active_tickers()
+                    print(f"\n>>> Loading signals for {len(all_tickers)} symbols (this takes 1-2 minutes)...")
         # Then update signals
         trader.update_signals()
         print(">>> Signals loaded.")
