@@ -1,9 +1,12 @@
-import pandas as pd #
+import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.io as pio
+
+pio.renderers.default = 'browser'
 
 # Function to flatten dataframe
 def flatten_dataframe(df):
@@ -65,11 +68,11 @@ def get_supertrend(high, low, close, period, multiplier):
 
 # Trading strategy implementation
 def implement_st_strategy(prices, st):
-    buy_price = []
-    sell_price = []
-    st_signal = []
+    buy_price = [np.nan]  # First element has no previous data
+    sell_price = [np.nan]
+    st_signal = [0]
     signal = 0
-    for i in range(len(st)):
+    for i in range(1, len(st)):  # Start at 1 to avoid index -1
         if st.iloc[i-1] > prices.iloc[i-1] and st.iloc[i] < prices.iloc[i]:
             if signal != 1:
                 buy_price.append(prices.iloc[i])
@@ -221,7 +224,11 @@ class TradingSystem:
         profit_factor = abs(total_profit / total_loss) if total_loss != 0 else float('inf')
         total_return = (equity_curve.iloc[-1] - self.initial_capital) / self.initial_capital
         max_drawdown = abs((equity_curve - equity_curve.expanding().max()).min())
-        sharpe_ratio = np.sqrt(252) * (equity_curve.pct_change().dropna().mean() / equity_curve.pct_change().dropna().std()) if len(equity_curve.pct_change().dropna()) > 1 else 0
+        pct_changes = equity_curve.pct_change().dropna()
+        if len(pct_changes) > 1 and pct_changes.std() != 0:
+            sharpe_ratio = np.sqrt(252) * (pct_changes.mean() / pct_changes.std())
+        else:
+            sharpe_ratio = 0.0
         return {
             "Total Trades": total_trades,
             "Winning Trades": winning_trades,
@@ -417,16 +424,6 @@ class TradingSystem:
         return fig
 
 
-    def _add_equity_curve(self, fig, equity_curve, name, color, row, col):
-        fig.add_trace(
-            go.Scatter(
-                x=equity_curve.index,
-                y=equity_curve.values,
-                name=name,
-                line=dict(color=color)
-            ),
-            row=row, col=col
-        )
     def print_statistics(self, stats, trade_type=""):
         print(f"\n{trade_type} Trading Statistics:")
         print("=" * 50)
@@ -445,39 +442,73 @@ class TradingSystem:
             else:
                 print(f"{key}: {value}")
     
-def main():
-    stock_symbol = "HON"
-    system = TradingSystem()
-    print(stock_symbol)
+# Configuration
+CONFIG = {
+    'symbols': [
+        "HON",      # Honeywell
+        "AAPL",     # Apple
+        "MSFT",     # Microsoft
+        "GOOGL",    # Alphabet
+        "AMZN",     # Amazon
+        "NVDA",     # NVIDIA
+        "META",     # Meta
+        "TSLA",     # Tesla
+        "JPM",      # JPMorgan
+        "V",        # Visa
+    ],
+    'supertrend_period': 7,
+    'supertrend_multiplier': 3,
+    'short_ma_period': 20,
+    'long_ma_period': 50,
+    'lookback_days': 365,
+    'initial_capital': 10000,
+}
+
+
+def analyze_symbol(stock_symbol, system, config):
+    """Analyze a single stock symbol and return results."""
+    print(f"\n{'='*60}")
+    print(f"Analyzing: {stock_symbol}")
+    print('='*60)
+
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
-    stock_data = yf.download(stock_symbol, start=start_date, end=end_date)
-    print("Available columns in stock_data:")
-    print(stock_data.columns)
-    
+    start_date = end_date - timedelta(days=config['lookback_days'])
+
+    try:
+        stock_data = yf.download(stock_symbol, start=start_date, end=end_date, progress=False)
+        if stock_data.empty:
+            print(f"No data available for {stock_symbol}")
+            return None
+    except Exception as e:
+        print(f"Error downloading {stock_symbol}: {e}")
+        return None
+
     # Flatten the DataFrame to handle MultiIndex columns
     stock_data = flatten_dataframe(stock_data)
-    
+
     close_col = f'Close_{stock_symbol}'
     high_col = f'High_{stock_symbol}'
     low_col = f'Low_{stock_symbol}'
-    
-    if 'TrendUp' not in stock_data.columns:
-        try:
-            stock_data['ShortMA'] = stock_data[close_col].rolling(window=20).mean()
-            stock_data['LongMA'] = stock_data[close_col].rolling(window=50).mean()
-            stock_data['TrendUp'] = stock_data['ShortMA'] > stock_data['LongMA']
-            stock_data['TrendUp'] = stock_data['TrendUp'].fillna(False)
-            print("TrendUp column created successfully")
-        except Exception as e:
-            print(f"Error creating TrendUp column: {e}")
-            print("Available columns:", stock_data.columns)
-            
-    if 'TrendDown' not in stock_data.columns:
-        stock_data['TrendDown'] = ~stock_data['TrendUp']
+
+    # Check if required columns exist
+    if close_col not in stock_data.columns:
+        print(f"Required column {close_col} not found for {stock_symbol}")
+        return None
+
+    # Calculate Moving Averages for TrendUp/TrendDown
+    stock_data['ShortMA'] = stock_data[close_col].rolling(window=config['short_ma_period']).mean()
+    stock_data['LongMA'] = stock_data[close_col].rolling(window=config['long_ma_period']).mean()
+    stock_data['TrendUp'] = (stock_data['ShortMA'] > stock_data['LongMA']).fillna(False)
+    stock_data['TrendDown'] = ~stock_data['TrendUp']
 
     # Calculate Supertrend
-    st, s_upt, st_dt = get_supertrend(stock_data[high_col], stock_data[low_col], stock_data[close_col], 7, 3)
+    st, s_upt, st_dt = get_supertrend(
+        stock_data[high_col],
+        stock_data[low_col],
+        stock_data[close_col],
+        config['supertrend_period'],
+        config['supertrend_multiplier']
+    )
     stock_data['Supertrend'] = st
     stock_data['SupertrendUp'] = s_upt
     stock_data['SupertrendDown'] = st_dt
@@ -487,43 +518,82 @@ def main():
     stock_data['Buy_Signal_Price'] = buy_price
     stock_data['Sell_Signal_Price'] = sell_price
     stock_data['ST_Signal'] = st_signal
-    
+
     long_trades, short_trades = system.generate_trading_lists(stock_data, stock_symbol)
-    
+
     # Calculate equity curves based on Supertrend trades
     long_equity = system.calculate_equity_curve(stock_data, long_trades)
     short_equity = system.calculate_equity_curve(stock_data, short_trades)
-    
+
     # Calculate buy and hold equity
     buy_and_hold_equity = (stock_data[close_col] / stock_data[close_col].iloc[0]) * system.initial_capital
-    
-    print("Long Trades:")
-    print(pd.DataFrame(long_trades).to_string(index=False))
-    print("\nShort Trades:")
-    print(pd.DataFrame(short_trades).to_string(index=False))
-    
+
+    # Print trade summary
+    print(f"\nLong Trades: {len(long_trades)}")
+    print(f"Short Trades: {len(short_trades)}")
+
+    # Calculate statistics
     long_stats = system.calculate_trade_statistics(long_trades, long_equity)
     short_stats = system.calculate_trade_statistics(short_trades, short_equity)
-    system.print_statistics(long_stats, "Long")
-    system.print_statistics(short_stats, "Short")
-    
-    print("Candlestick Data for Plot:")
-    stock_data_flat = flatten_dataframe(stock_data)  # Ensure DataFrame is flattened for plotting
-    fig = system.plot_results(stock_data_flat, long_trades, short_trades, long_equity, short_equity, buy_and_hold_equity, stock_symbol)
-    
-    fig.show()
-    print("Stock Data Null Values:", stock_data.isnull().sum())
-    print("Candlestick Chart Data:")
-    try:
-        print(stock_data[[f'Open_{stock_symbol}', f'High_{stock_symbol}', f'Low_{stock_symbol}', f'Close_{stock_symbol}']].dropna().head())
-    except KeyError:
-        try:
-            print(stock_data[['Open_BTC-EUR', 'High_BTC-EUR', 'Low_BTC-EUR', 'Close_BTC-EUR']].dropna().head())
-        except KeyError:
-            print("Could not access OHLC columns - see available columns above")
+    system.print_statistics(long_stats, f"{stock_symbol} Long")
+    system.print_statistics(short_stats, f"{stock_symbol} Short")
 
-import plotly.io as pio
-pio.renderers.default = 'browser'
+    return {
+        'symbol': stock_symbol,
+        'data': stock_data,
+        'long_trades': long_trades,
+        'short_trades': short_trades,
+        'long_equity': long_equity,
+        'short_equity': short_equity,
+        'buy_and_hold_equity': buy_and_hold_equity,
+        'long_stats': long_stats,
+        'short_stats': short_stats
+    }
+
+
+def main():
+    system = TradingSystem(initial_capital=CONFIG['initial_capital'])
+
+    # Analyze all configured symbols
+    results = []
+    for symbol in CONFIG['symbols']:
+        result = analyze_symbol(symbol, system, CONFIG)
+        if result:
+            results.append(result)
+
+    # Summary
+    print(f"\n{'='*60}")
+    print("SUMMARY")
+    print('='*60)
+    print(f"Total symbols analyzed: {len(results)}/{len(CONFIG['symbols'])}")
+
+    # Print best performers
+    if results:
+        print("\nBest Long Performers (by Total Return):")
+        sorted_long = sorted(results, key=lambda x: x['long_stats']['Total Return'], reverse=True)
+        for i, r in enumerate(sorted_long[:3], 1):
+            print(f"  {i}. {r['symbol']}: {r['long_stats']['Total Return']*100:.2f}%")
+
+        print("\nBest Short Performers (by Total Return):")
+        sorted_short = sorted(results, key=lambda x: x['short_stats']['Total Return'], reverse=True)
+        for i, r in enumerate(sorted_short[:3], 1):
+            print(f"  {i}. {r['symbol']}: {r['short_stats']['Total Return']*100:.2f}%")
+
+    # Plot first symbol as example (or all if desired)
+    if results:
+        print(f"\nShowing chart for: {results[0]['symbol']}")
+        r = results[0]
+        fig = system.plot_results(
+            r['data'],
+            r['long_trades'],
+            r['short_trades'],
+            r['long_equity'],
+            r['short_equity'],
+            r['buy_and_hold_equity'],
+            r['symbol']
+        )
+        fig.show()
+
 
 if __name__ == "__main__":
     main()
