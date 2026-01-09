@@ -595,12 +595,20 @@ class IBPaperTrader:
             return True
 
         try:
+            # Suppress noisy IB logs during connect
+            ib_logger = logging.getLogger('ib_insync')
+            old_level = ib_logger.level
+            ib_logger.setLevel(logging.WARNING)
+
             self.ib = IB()
             self.ib.connect(
                 self.config.host,
                 self.config.port,
                 clientId=self.config.client_id
             )
+
+            # Restore logging
+            ib_logger.setLevel(old_level)
             logger.info(f"Connected to IB at {self.config.host}:{self.config.port}")
 
             # Check market data type
@@ -1528,6 +1536,9 @@ class IBPaperTrader:
                         time.sleep(300)
                         continue
 
+                    # Show portfolio FIRST
+                    self.show_status()
+
                     # Update signals
                     self.update_signals()
 
@@ -1535,7 +1546,7 @@ class IBPaperTrader:
                     if self.is_connected():
                         self.execute_signals()
 
-                    # Show status
+                    # Show updated status
                     self.show_status()
 
                     # Wait for next update
@@ -1617,7 +1628,11 @@ def main():
         trader.connect()
         is_open, status = trader.is_market_open()
         print(f"\n>>> {status}")
+        # Show portfolio FIRST
+        trader.show_status()
+        # Then update signals
         trader.update_signals()
+        # Show updated status with signals
         trader.show_status()
         trader.disconnect()
     else:
