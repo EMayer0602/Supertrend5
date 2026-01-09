@@ -65,7 +65,7 @@ class TradingConfig:
     # Portfolio Settings
     initial_capital: float = 100000.0  # $100k paper trading account
     max_position_pct: float = 0.05     # Max 5% per position
-    max_positions: int = 30            # Max 30 concurrent positions
+    max_positions: int = 40            # Max 40 concurrent positions
 
     # Supertrend Parameters (optimized from backtests)
     st_period: int = 15
@@ -331,18 +331,23 @@ def calculate_jma(close: np.ndarray, period: int = 7, phase: float = 0, power: i
     return jma
 
 
-def apply_kama_strategy(df: pd.DataFrame) -> pd.DataFrame:
-    """KAMA Strategy - Kaufman Adaptive Moving Average crossover"""
+def _apply_kama_crossover(df: pd.DataFrame, signal_col: str, fast_period: int = 10, slow_period: int = 30) -> pd.DataFrame:
+    """Helper: Apply KAMA crossover strategy (used by both KAMA and TREND_FOLLOW)"""
     close = df['close'].values
 
-    kama_fast = calculate_kama(close, period=10, fast=2, slow=30)
-    kama_slow = calculate_kama(close, period=30, fast=2, slow=30)
+    kama_fast = calculate_kama(close, period=fast_period, fast=2, slow=30)
+    kama_slow = calculate_kama(close, period=slow_period, fast=2, slow=30)
 
     df['kama_fast'] = kama_fast
     df['kama_slow'] = kama_slow
-    df['kama_signal'] = np.where(kama_fast > kama_slow, 1, -1)
+    df[signal_col] = np.where(kama_fast > kama_slow, 1, -1)
 
     return df
+
+
+def apply_kama_strategy(df: pd.DataFrame) -> pd.DataFrame:
+    """KAMA Strategy - Kaufman Adaptive Moving Average crossover"""
+    return _apply_kama_crossover(df, 'kama_signal')
 
 
 def get_kama_signal(df: pd.DataFrame) -> str:
@@ -416,17 +421,7 @@ def apply_trend_follow_strategy(df: pd.DataFrame) -> pd.DataFrame:
     - Buy when fast KAMA crosses above slow KAMA
     - Sell when fast KAMA crosses below slow KAMA
     """
-    close = df['close'].values
-
-    # Use KAMA instead of EMA for better adaptation
-    kama_fast = calculate_kama(close, period=10, fast=2, slow=30)
-    kama_slow = calculate_kama(close, period=30, fast=2, slow=30)
-
-    df['kama_fast'] = kama_fast
-    df['kama_slow'] = kama_slow
-    df['trend_follow_signal'] = np.where(kama_fast > kama_slow, 1, -1)
-
-    return df
+    return _apply_kama_crossover(df, 'trend_follow_signal')
 
 
 def get_trend_follow_signal(df: pd.DataFrame) -> str:
@@ -657,8 +652,8 @@ class IBPaperTrader:
         if self.ib:
             try:
                 self.ib.disconnect()
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Disconnect error (ignored): {e}")
             self.ib = None
 
         # Wait before reconnecting
@@ -773,6 +768,11 @@ class IBPaperTrader:
 
     def calculate_position_size(self, symbol: str, price: float) -> int:
         """Calculate position size based on risk management rules"""
+        # Validate price to prevent division by zero
+        if price is None or price <= 0:
+            logger.warning(f"Invalid price for {symbol}: {price}")
+            return 0
+
         account = self.get_account_info()
         equity = account.get('NetLiquidation', self.config.initial_capital)
 

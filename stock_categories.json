@@ -1,0 +1,120 @@
+{
+    "_comment": "Stock categories - Optimized by indicator backtest (SUPERTREND, KAMA, JMA)",
+    "_last_updated": "2026-01-09 18:00",
+    "strategies": {
+        "SUPERTREND": {
+            "description": "Stocks where Supertrend indicator beats B&H",
+            "settings": {
+                "st_period": 15,
+                "st_multiplier": 4.0,
+                "trailing_stop_pct": 0.12,
+                "stop_loss_pct": 0.36
+            },
+            "tickers": [
+                "MRK",
+                "MRNA",
+                "NFLX",
+                "NKE",
+                "PDYN",
+                "PFE",
+                "PYPL",
+                "QBTS",
+                "TKMS",
+                "DIS",
+                "BA",
+                "INTC",
+                "ROKU",
+                "DKNG"
+            ]
+        },
+        "KAMA": {
+            "description": "Stocks where KAMA crossover beats B&H",
+            "settings": {
+                "kama_fast": 10,
+                "kama_slow": 30,
+                "trailing_stop_pct": 0.15,
+                "stop_loss_pct": 0.21
+            },
+            "tickers": [
+                "JNJ",
+                "TGT"
+            ]
+        },
+        "JMA": {
+            "description": "Stocks where JMA crossover beats B&H",
+            "settings": {
+                "jma_fast": 7,
+                "jma_slow": 21,
+                "trailing_stop_pct": 0.15,
+                "stop_loss_pct": 0.22
+            },
+            "tickers": [
+                "UNH"
+            ]
+        },
+        "BUY_HOLD": {
+            "description": "Strong uptrends - no indicator beats B&H, use 20% trailing stop",
+            "settings": {
+                "trailing_stop_pct": 0.20,
+                "stop_loss_pct": 0.26,
+                "reentry_after_days": 5
+            },
+            "tickers": [
+                "AMD",
+                "AVGO",
+                "COIN",
+                "CRWD",
+                "DRH",
+                "INOD",
+                "JPM",
+                "META",
+                "MSTR",
+                "MU",
+                "NVDA",
+                "PLTR",
+                "QUBT",
+                "SHOP",
+                "TSLA",
+                "UBER",
+                "AAPL",
+                "MSFT",
+                "GOOGL",
+                "AMZN",
+                "CRM",
+                "NOW"
+            ]
+        },
+        "TREND_FOLLOW": {
+            "description": "ETFs - KAMA crossover",
+            "settings": {
+                "kama_fast": 10,
+                "kama_slow": 30,
+                "trailing_stop_pct": 0.15,
+                "stop_loss_pct": 0.06
+            },
+            "tickers": [
+                "SPY",
+                "QQQ"
+            ]
+        },
+        "EXCLUDED": {
+            "description": "Excluded stocks (delisted, not tradeable)",
+            "tickers": [
+                "WBA",
+                "SQ",
+                "PG"
+            ]
+        }
+    },
+    "ticker_settings": {
+        "_comment": "Per-ticker overrides for exchange and currency",
+        "TKMS": {
+            "exchange": "SMART",
+            "currency": "EUR"
+        }
+    },
+    "watchlist": {
+        "description": "Stocks to monitor",
+        "tickers": []
+    }
+}
