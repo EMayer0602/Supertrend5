@@ -1663,7 +1663,7 @@ def main():
         # Show portfolio FIRST
         trader.show_status()
         all_tickers = get_all_active_tickers()
-                    print(f"\n>>> Loading signals for {len(all_tickers)} symbols (this takes 1-2 minutes)...")
+        print(f"\n>>> Loading signals for {len(all_tickers)} symbols (this takes 1-2 minutes)...")
         # Then update signals
         trader.update_signals()
         print(">>> Signals loaded.")
