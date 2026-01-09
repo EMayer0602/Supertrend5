@@ -725,72 +725,69 @@ class IBPaperTrader:
         return positions
 
     def fetch_historical_data(self, symbol: str, days: int = 60, timeout_sec: int = 30) -> Optional[pd.DataFrame]:
-        """Fetch historical data for a symbol with timeout protection"""
-        if self.dry_run:
-            # Use yfinance for dry run with timeout protection
-            import concurrent.futures
+        """Fetch historical data for a symbol - uses IB when connected, yfinance as fallback"""
+
+        # Always try IB first when connected (real-time data)
+        if self.ib and self.ib.isConnected():
             try:
-                import yfinance as yf
-                end = datetime.now()
-                start = end - timedelta(days=days)
+                exchange, currency = get_ticker_contract_params(symbol)
+                contract = Stock(symbol, exchange, currency)
+                self.ib.qualifyContracts(contract)
 
-                # Use ThreadPoolExecutor for timeout
-                def download_data():
-                    return yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
+                bars = self.ib.reqHistoricalData(
+                    contract,
+                    endDateTime='',
+                    durationStr=f'{days} D',
+                    barSizeSetting='1 day',
+                    whatToShow='TRADES',
+                    useRTH=True,
+                    timeout=timeout_sec
+                )
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(download_data)
-                    try:
-                        df = future.result(timeout=timeout_sec)
-                    except concurrent.futures.TimeoutError:
-                        logger.warning(f"Timeout fetching {symbol} after {timeout_sec}s")
-                        return None
+                if bars:
+                    df = util.df(bars)
+                    df.columns = [c.lower() for c in df.columns]
+                    df.set_index('date', inplace=True)
+                    return df
+                else:
+                    logger.warning(f"{symbol}: No IB data, trying yfinance fallback")
+            except Exception as e:
+                logger.warning(f"{symbol}: IB error ({e}), trying yfinance fallback")
 
-                if df.empty:
+        # Fallback to yfinance (dry-run mode or IB failed)
+        import concurrent.futures
+        try:
+            import yfinance as yf
+            end = datetime.now()
+            start = end - timedelta(days=days)
+
+            # Use ThreadPoolExecutor for timeout
+            def download_data():
+                return yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(download_data)
+                try:
+                    df = future.result(timeout=timeout_sec)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"Timeout fetching {symbol} after {timeout_sec}s")
                     return None
 
-                # Handle MultiIndex columns (new yfinance format)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [col[0].lower() for col in df.columns]
-                else:
-                    df.columns = [c.lower() for c in df.columns]
-
-                # Remove adj close if present
-                if 'adj close' in df.columns:
-                    df = df.drop('adj close', axis=1)
-                return df
-            except Exception as e:
-                logger.error(f"Error fetching data for {symbol}: {e}")
+            if df.empty:
                 return None
 
-        if not self.ib:
-            return None
+            # Handle MultiIndex columns (new yfinance format)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [col[0].lower() for col in df.columns]
+            else:
+                df.columns = [c.lower() for c in df.columns]
 
-        try:
-            exchange, currency = get_ticker_contract_params(symbol)
-            contract = Stock(symbol, exchange, currency)
-            self.ib.qualifyContracts(contract)
-
-            bars = self.ib.reqHistoricalData(
-                contract,
-                endDateTime='',
-                durationStr=f'{days} D',
-                barSizeSetting='1 day',
-                whatToShow='TRADES',
-                useRTH=True,
-                timeout=timeout_sec  # Add timeout
-            )
-
-            if not bars:
-                return None
-
-            df = util.df(bars)
-            df.columns = [c.lower() for c in df.columns]
-            df.set_index('date', inplace=True)
+            # Remove adj close if present
+            if 'adj close' in df.columns:
+                df = df.drop('adj close', axis=1)
             return df
-
         except Exception as e:
-            logger.error(f"Error fetching IB data for {symbol}: {e}")
+            logger.error(f"Error fetching data for {symbol}: {e}")
             return None
 
     def calculate_position_size(self, symbol: str, price: float) -> int:
@@ -936,12 +933,18 @@ class IBPaperTrader:
         all_tickers = get_all_active_tickers()
         total = len(all_tickers)
 
+        # Show data source
+        if self.is_connected():
+            print("    [Data source: IB (real-time)]")
+        else:
+            print("    [Data source: yfinance (delayed)]")
+
         logger.info(f"Tracking {total} stocks across {len(stocks_by_strategy)} strategies")
 
         for i, symbol in enumerate(all_tickers, 1):
             try:
                 # Show progress
-                print(f"    [{i}/{total}] Loading {symbol}...", end=" ", flush=True)
+                print(f"    [{i}/{total}] {symbol}...", end=" ", flush=True)
 
                 # Fetch data
                 df = self.fetch_historical_data(symbol, days=60)
