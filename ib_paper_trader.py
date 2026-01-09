@@ -607,8 +607,8 @@ class IBPaperTrader:
                 clientId=self.config.client_id
             )
 
-            # Restore logging
-            ib_logger.setLevel(old_level)
+            # Keep IB logging suppressed (too noisy with updatePortfolio etc.)
+            # ib_logger.setLevel(old_level)  # Don't restore - keep it quiet
             logger.info(f"Connected to IB at {self.config.host}:{self.config.port}")
 
             # Check market data type
