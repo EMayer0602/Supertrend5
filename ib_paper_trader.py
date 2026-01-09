@@ -725,9 +725,9 @@ class IBPaperTrader:
         return positions
 
     def fetch_historical_data(self, symbol: str, days: int = 60, timeout_sec: int = 30) -> Optional[pd.DataFrame]:
-        """Fetch historical data for a symbol - uses IB when connected, yfinance as fallback"""
+        """Fetch historical data - IB ONLY when connected (no yfinance mixing!)"""
 
-        # Always try IB first when connected (real-time data)
+        # When connected to IB: ONLY use IB data (no fallback!)
         if self.ib and self.ib.isConnected():
             try:
                 exchange, currency = get_ticker_contract_params(symbol)
@@ -750,18 +750,19 @@ class IBPaperTrader:
                     df.set_index('date', inplace=True)
                     return df
                 else:
-                    logger.warning(f"{symbol}: No IB data, trying yfinance fallback")
+                    logger.warning(f"{symbol}: No IB data available")
+                    return None  # NO FALLBACK - skip this symbol
             except Exception as e:
-                logger.warning(f"{symbol}: IB error ({e}), trying yfinance fallback")
+                logger.error(f"{symbol}: IB error ({e})")
+                return None  # NO FALLBACK - skip this symbol
 
-        # Fallback to yfinance (dry-run mode or IB failed)
+        # Only use yfinance when NOT connected (dry-run mode only)
         import concurrent.futures
         try:
             import yfinance as yf
             end = datetime.now()
             start = end - timedelta(days=days)
 
-            # Use ThreadPoolExecutor for timeout
             def download_data():
                 return yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
 
@@ -782,7 +783,6 @@ class IBPaperTrader:
             else:
                 df.columns = [c.lower() for c in df.columns]
 
-            # Remove adj close if present
             if 'adj close' in df.columns:
                 df = df.drop('adj close', axis=1)
             return df
