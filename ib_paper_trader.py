@@ -1539,12 +1539,18 @@ class IBPaperTrader:
                     # Show portfolio FIRST
                     self.show_status()
 
+                    print("\n>>> Loading signals for 41 symbols (this takes 1-2 minutes)...")
+
                     # Update signals
                     self.update_signals()
+
+                    print(">>> Signals loaded. Executing trades...")
 
                     # Execute signals (only if connected)
                     if self.is_connected():
                         self.execute_signals()
+                    else:
+                        print(">>> NOT CONNECTED - cannot execute signals!")
 
                     # Show updated status
                     self.show_status()
@@ -1630,8 +1636,10 @@ def main():
         print(f"\n>>> {status}")
         # Show portfolio FIRST
         trader.show_status()
+        print("\n>>> Loading signals for 41 symbols (this takes 1-2 minutes)...")
         # Then update signals
         trader.update_signals()
+        print(">>> Signals loaded.")
         # Show updated status with signals
         trader.show_status()
         trader.disconnect()
