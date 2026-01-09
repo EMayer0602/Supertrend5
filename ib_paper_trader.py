@@ -833,7 +833,7 @@ class IBPaperTrader:
 
             # Use LIMIT order at mid-price
             order = LimitOrder(action, quantity, mid_price)
-            order.tif = 'DAY'  # Good for day
+            order.tif = 'GTC'  # Good till cancelled
 
             trade = self.ib.placeOrder(contract, order)
             self.ib.sleep(2)  # Wait for order to process
@@ -942,6 +942,7 @@ class IBPaperTrader:
             except Exception as e:
                 logger.error(f"Error updating signal for {symbol}: {e}")
 
+        logger.info(f"Signal update complete for {len(self.signals)} symbols")
         self._save_state()
 
     def execute_signals(self):
