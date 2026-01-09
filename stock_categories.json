@@ -1,6 +1,6 @@
 {
     "_comment": "Stock categories - Optimized by indicator backtest (SUPERTREND, KAMA, JMA)",
-    "_last_updated": "2026-01-09 18:00",
+    "_last_updated": "2026-01-07 16:45",
     "strategies": {
         "SUPERTREND": {
             "description": "Stocks where Supertrend indicator beats B&H",
