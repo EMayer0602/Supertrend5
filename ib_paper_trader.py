@@ -65,7 +65,7 @@ class TradingConfig:
     # Portfolio Settings
     initial_capital: float = 100000.0  # $100k paper trading account
     max_position_pct: float = 0.05     # Max 5% per position
-    max_positions: int = 40            # Max 40 concurrent positions
+    max_positions: int = 30            # Max 30 concurrent positions
 
     # Supertrend Parameters (optimized from backtests)
     st_period: int = 15
