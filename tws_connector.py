@@ -237,6 +237,12 @@ class TWSConnector:
         # Get account values
         account_values = self.ib.accountValues()
 
+        # Debug: print all available account tags
+        # print("Available account values:")
+        # for av in account_values:
+        #     if av.tag.startswith('Net') or av.tag.startswith('Total') or 'PnL' in av.tag:
+        #         print(f"  {av.tag}: {av.value} ({av.currency})")
+
         # Parse account values into dict
         values = {}
         account_id = ""
@@ -244,7 +250,11 @@ class TWSConnector:
         for av in account_values:
             if av.tag in ['NetLiquidation', 'TotalCashValue', 'BuyingPower',
                           'GrossPositionValue', 'UnrealizedPnL', 'RealizedPnL']:
-                if av.currency == 'USD' or av.currency == 'BASE':
+                # Accept BASE currency (consolidated) or any currency if BASE not available
+                if av.currency == 'BASE':
+                    values[av.tag] = float(av.value) if av.value else 0.0
+                    account_id = av.account
+                elif av.tag not in values:  # Only set if not already set by BASE
                     values[av.tag] = float(av.value) if av.value else 0.0
                     account_id = av.account
 
