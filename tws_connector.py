@@ -129,8 +129,8 @@ class TWSConnector:
 
             if self._connected:
                 print(f"Connected to TWS at {self.host}:{self.port}")
-                # Request account updates
-                self.ib.reqAccountUpdates(True, '')
+                # Wait for account data to be ready
+                self.ib.sleep(1)
             else:
                 print("Failed to connect to TWS")
 

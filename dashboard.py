@@ -507,6 +507,8 @@ class TradeDashboard:
             pnl_pct = (trade.realized_pnl / (trade.entry_price * trade.entry_quantity)) * 100 if trade.entry_price > 0 else 0
             duration = trade.duration()
             duration_str = f"{duration.days}d {duration.seconds//3600}h" if duration else "-"
+            exit_price_str = f"${trade.exit_price:,.2f}" if trade.exit_price else "-"
+            exit_date_str = trade.exit_date.strftime('%Y-%m-%d %H:%M') if trade.exit_date else '-'
 
             rows += f"""
             <tr>
@@ -515,8 +517,8 @@ class TradeDashboard:
                 <td><span class="badge {direction_badge}">{trade.direction.value}</span></td>
                 <td>{trade.entry_date.strftime('%Y-%m-%d %H:%M')}</td>
                 <td>${trade.entry_price:,.2f}</td>
-                <td>{trade.exit_date.strftime('%Y-%m-%d %H:%M') if trade.exit_date else '-'}</td>
-                <td>${trade.exit_price:,.2f if trade.exit_price else 0}</td>
+                <td>{exit_date_str}</td>
+                <td>{exit_price_str}</td>
                 <td class="{pnl_class}">${trade.realized_pnl:,.2f}</td>
                 <td class="{pnl_class}">{pnl_pct:+.2f}%</td>
                 <td>{trade.exit_reason or '-'}</td>
