@@ -713,30 +713,43 @@ class TradeDashboard:
             """
 
         data = []
+        error_msg = ""
 
         # Sync trades from monitor and calculate equity curve
         if EQUITY_CALC_AVAILABLE:
             try:
                 calc = self._sync_trades_to_equity_calc()
-                if calc and calc.trades:
-                    data = calc.get_equity_curve_data(days=days)
+                if calc:
+                    print(f"[EquityCurve] Trades: {len(calc.trades)}, IB connected: {calc.ib.isConnected() if calc.ib else False}")
+                    if calc.trades:
+                        data = calc.get_equity_curve_data(days=days)
+                        print(f"[EquityCurve] Data points: {len(data)}")
+                    else:
+                        error_msg = "Keine Trades in Calculator"
+                else:
+                    error_msg = "Calculator nicht erstellt"
             except Exception as e:
-                print(f"Equity calc error: {e}")
+                print(f"[EquityCurve] Error: {e}")
+                error_msg = str(e)
+        else:
+            error_msg = "EquityCurveCalculator nicht verfügbar"
 
         # Fall back to live PnL history
         if not data and PNL_HISTORY_AVAILABLE:
             try:
                 history = PnLHistory()
                 data = history.get_total_pnl_curve(hours=hours)
-            except Exception:
-                pass
+                print(f"[EquityCurve] Fallback PnL history: {len(data)} points")
+            except Exception as e:
+                print(f"[EquityCurve] PnL history error: {e}")
 
         if len(data) < 2:
-            return """
+            msg = error_msg or "Keine Daten"
+            return f"""
             <div class="card">
                 <h2>Kapitalkurve (R+U PnL)</h2>
                 <p style="color: #888; text-align: center; padding: 20px;">
-                    Keine Trades im Monitor. Verbinde mit TWS.
+                    {msg}
                 </p>
             </div>
             """
@@ -1109,8 +1122,13 @@ def main():
                 # Record initial PnL
                 record_pnl(monitor)
 
-                # Create dashboard
-                dashboard = TradeDashboard(monitor, title="TWS Trade Monitor")
+                # Create dashboard with IB connection for equity curve
+                dashboard = TradeDashboard(
+                    monitor,
+                    title="TWS Trade Monitor",
+                    ib_port=args.port,
+                    ib_connection=connector.ib
+                )
                 dashboard.open_in_browser(args.output, auto_refresh=args.refresh)
 
                 if args.refresh > 0:
