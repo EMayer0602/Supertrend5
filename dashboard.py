@@ -360,24 +360,26 @@ class TradeDashboard:
 
     def _generate_summary_cards(self, stats: Dict) -> str:
         """Generate summary cards HTML."""
-        # Parse values
-        net_profit = self._parse_currency(stats.get('Net Profit', '$0'))
-        total_return = stats.get('Total Return', '0%')
+        # Get values - prefer TWS values if available
+        total_equity = self.monitor.initial_capital  # Net Liquidation from TWS
+        daily_pnl = self.monitor.get_daily_pnl()  # Realized + Unrealized from TWS
+        unrealized = self.monitor.tws_unrealized_pnl if self.monitor.tws_unrealized_pnl is not None else self.monitor.get_unrealized_pnl()
+        realized = self.monitor.tws_realized_pnl if self.monitor.tws_realized_pnl is not None else self.monitor.get_realized_pnl()
+
+        # Other stats
+        open_trades = len(self.monitor.open_trades)
         win_rate = stats.get('Win Rate', '0%')
         total_trades = stats.get('Total Trades', 0)
-        open_trades = stats.get('Open Trades', len(self.monitor.open_trades))
-        unrealized = self.monitor.get_unrealized_pnl()
-        daily_pnl = self.monitor.get_daily_pnl()
-        total_equity = self.monitor.get_total_equity()
 
-        profit_class = 'positive' if net_profit >= 0 else 'negative'
-        unrealized_class = 'positive' if unrealized >= 0 else 'negative'
+        # CSS classes
         daily_pnl_class = 'positive' if daily_pnl >= 0 else 'negative'
+        unrealized_class = 'positive' if unrealized >= 0 else 'negative'
+        realized_class = 'positive' if realized >= 0 else 'negative'
 
         return f"""
         <div class="summary-cards">
             <div class="summary-card">
-                <div class="label">Total Equity</div>
+                <div class="label">Net Liquidation</div>
                 <div class="value neutral">${total_equity:,.2f}</div>
             </div>
             <div class="summary-card">
@@ -389,24 +391,24 @@ class TradeDashboard:
                 <div class="value {unrealized_class}">${unrealized:+,.2f}</div>
             </div>
             <div class="summary-card">
-                <div class="label">Net Profit</div>
-                <div class="value {profit_class}">${net_profit:,.2f}</div>
+                <div class="label">Realized PnL</div>
+                <div class="value {realized_class}">${realized:+,.2f}</div>
             </div>
             <div class="summary-card">
-                <div class="label">Win Rate</div>
-                <div class="value neutral">{win_rate}</div>
+                <div class="label">Cash Balance</div>
+                <div class="value neutral">${self.monitor.current_capital:,.2f}</div>
             </div>
             <div class="summary-card">
                 <div class="label">Open Positions</div>
                 <div class="value neutral">{open_trades}</div>
             </div>
             <div class="summary-card">
-                <div class="label">Total Trades</div>
-                <div class="value neutral">{total_trades}</div>
+                <div class="label">Win Rate</div>
+                <div class="value neutral">{win_rate}</div>
             </div>
             <div class="summary-card">
-                <div class="label">Total Return</div>
-                <div class="value {'positive' if not total_return.startswith('-') else 'negative'}">{total_return}</div>
+                <div class="label">Total Trades</div>
+                <div class="value neutral">{total_trades}</div>
             </div>
         </div>
         """

@@ -229,6 +229,11 @@ class TradeMonitor:
         self.previous_day_equity: float = initial_capital
         self.today_start_equity: float = initial_capital
 
+        # TWS-specific values (set by TWS connector)
+        self.tws_daily_pnl: Optional[float] = None  # Realized + Unrealized from TWS
+        self.tws_unrealized_pnl: Optional[float] = None
+        self.tws_realized_pnl: Optional[float] = None
+
         # Monitoring thread (for live trading)
         self._monitoring = False
         self._monitor_thread: Optional[threading.Thread] = None
@@ -458,7 +463,11 @@ class TradeMonitor:
         return self.current_prices.get(symbol)
 
     def get_daily_pnl(self) -> float:
-        """Get today's PnL (realized + unrealized change since market open)."""
+        """Get today's PnL (realized + unrealized from TWS or calculated)."""
+        # Use TWS value if available (more accurate)
+        if self.tws_daily_pnl is not None:
+            return self.tws_daily_pnl
+        # Fall back to calculated value
         current_equity = self.get_total_equity()
         return current_equity - self.today_start_equity
 

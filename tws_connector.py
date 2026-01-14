@@ -303,46 +303,76 @@ class TWSConnector:
         account = self.get_account_summary()
 
         if account:
+            # Set capital values from TWS account
             monitor.initial_capital = account.net_liquidation
             monitor.current_capital = account.total_cash
+            monitor.today_start_equity = account.net_liquidation  # For daily PnL
+
+            # Store TWS daily PnL (realized + unrealized)
+            monitor.tws_daily_pnl = account.realized_pnl + account.unrealized_pnl
+            monitor.tws_unrealized_pnl = account.unrealized_pnl
+            monitor.tws_realized_pnl = account.realized_pnl
+
+            print(f"\nAccount: {account.account_id}")
+            print(f"  Net Liquidation: ${account.net_liquidation:,.2f}")
+            print(f"  Cash: ${account.total_cash:,.2f}")
+            print(f"  Unrealized PnL: ${account.unrealized_pnl:,.2f}")
+            print(f"  Realized PnL: ${account.realized_pnl:,.2f}")
+            print(f"  Daily PnL (R+U): ${account.realized_pnl + account.unrealized_pnl:+,.2f}")
+
+        # Clear existing open trades to refresh from TWS
+        monitor.open_trades.clear()
 
         # Collect all prices for batch update
         prices_to_update = {}
+        total_position_value = 0.0
+        total_unrealized = 0.0
+
+        print(f"\nPositions ({len(positions)}):")
+        print("-" * 80)
 
         # Update positions
         for pos in positions:
             if pos.position != 0:
-                # Check if we already have this position
-                existing = [t for t in monitor.open_trades
-                           if t.symbol == pos.symbol and t.status == TradeStatus.OPEN]
+                direction = TradeDirection.LONG if pos.position > 0 else TradeDirection.SHORT
 
-                if not existing:
-                    # Add as open trade
-                    direction = TradeDirection.LONG if pos.position > 0 else TradeDirection.SHORT
-                    trade = Trade(
-                        trade_id=f"TWS_{pos.symbol}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                        symbol=pos.symbol,
-                        direction=direction,
-                        status=TradeStatus.OPEN,
-                        entry_date=datetime.now(),
-                        entry_price=pos.avg_cost,
-                        entry_quantity=abs(int(pos.position)),
-                        unrealized_pnl=pos.unrealized_pnl,
-                        realized_pnl=pos.realized_pnl,
-                        current_price=pos.market_price  # Set current price per trade
-                    )
-                    monitor.open_trades.append(trade)
-                    monitor.all_trades.append(trade)
-                else:
-                    # Update existing trade
-                    trade = existing[0]
-                    trade.unrealized_pnl = pos.unrealized_pnl
-                    trade.current_price = pos.market_price
+                # Calculate per-share avg cost (TWS gives total cost for some instruments)
+                avg_cost_per_share = pos.avg_cost
+                if abs(pos.position) > 0 and pos.avg_cost > 1000:
+                    # Might be total cost, not per share - check market price ratio
+                    if pos.market_price > 0 and pos.avg_cost / abs(pos.position) < pos.market_price * 2:
+                        avg_cost_per_share = pos.avg_cost / abs(pos.position)
+
+                trade = Trade(
+                    trade_id=f"TWS_{pos.symbol}",
+                    symbol=pos.symbol,
+                    direction=direction,
+                    status=TradeStatus.OPEN,
+                    entry_date=datetime.now(),  # TWS doesn't provide entry date
+                    entry_price=avg_cost_per_share,
+                    entry_quantity=abs(int(pos.position)),
+                    unrealized_pnl=pos.unrealized_pnl,
+                    realized_pnl=pos.realized_pnl,
+                    current_price=pos.market_price
+                )
+                monitor.open_trades.append(trade)
+                monitor.all_trades.append(trade)
 
                 # Collect price for this symbol
                 prices_to_update[pos.symbol] = pos.market_price
+                total_position_value += pos.market_value
+                total_unrealized += pos.unrealized_pnl
 
-        # Update all prices at once
+                # Print position info
+                pnl_str = f"${pos.unrealized_pnl:+,.2f}" if pos.unrealized_pnl else "$0.00"
+                print(f"  {pos.symbol:<8} {pos.position:>8.0f} @ ${avg_cost_per_share:>10.2f}  "
+                      f"Mkt: ${pos.market_price:>10.2f}  Value: ${pos.market_value:>12.2f}  PnL: {pnl_str}")
+
+        print("-" * 80)
+        print(f"  Total Position Value: ${total_position_value:,.2f}")
+        print(f"  Total Unrealized PnL: ${total_unrealized:+,.2f}")
+
+        # Update all prices at once (this also creates equity point)
         if prices_to_update:
             monitor.update_prices(prices_to_update)
 
