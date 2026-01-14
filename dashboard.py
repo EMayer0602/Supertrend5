@@ -570,62 +570,81 @@ class TradeDashboard:
         """
 
     def _generate_equity_chart(self) -> str:
-        """Generate equity curve chart HTML using Plotly."""
-        if not PLOTLY_AVAILABLE or not self.monitor.equity_curve:
-            return """
+        """Generate unrealized PnL chart HTML using Plotly."""
+        # Get current unrealized PnL from TWS or calculate
+        unrealized_pnl = self.monitor.tws_unrealized_pnl if self.monitor.tws_unrealized_pnl is not None else self.monitor.get_unrealized_pnl()
+
+        if not PLOTLY_AVAILABLE:
+            return f"""
             <div class="card">
-                <h2>Equity Curve</h2>
-                <p style="color: #888; text-align: center; padding: 20px;">No equity data available</p>
+                <h2>Unrealized PnL</h2>
+                <p style="color: {'#00e676' if unrealized_pnl >= 0 else '#ff5252'}; text-align: center; padding: 20px; font-size: 2em;">
+                    ${unrealized_pnl:+,.2f}
+                </p>
             </div>
             """
 
-        df = self.monitor.get_equity_curve_df()
+        # Calculate unrealized PnL per position for bar chart
+        positions = []
+        pnls = []
+        for trade in self.monitor.open_trades:
+            positions.append(trade.symbol)
+            pnl = trade.unrealized_pnl if trade.unrealized_pnl else 0
+            pnls.append(pnl)
+
+        if not positions:
+            return f"""
+            <div class="card">
+                <h2>Unrealized PnL</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No open positions</p>
+            </div>
+            """
+
+        # Sort by PnL
+        sorted_data = sorted(zip(positions, pnls), key=lambda x: x[1], reverse=True)
+        positions, pnls = zip(*sorted_data) if sorted_data else ([], [])
+
+        colors = ['#00e676' if p >= 0 else '#ff5252' for p in pnls]
 
         fig = go.Figure()
 
-        # Equity line
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['Equity'],
-            mode='lines',
-            name='Equity',
-            line=dict(color='#00d9ff', width=2),
-            fill='tozeroy',
-            fillcolor='rgba(0, 217, 255, 0.1)'
+        # Bar chart of unrealized PnL per position
+        fig.add_trace(go.Bar(
+            x=list(positions),
+            y=list(pnls),
+            marker_color=colors,
+            text=[f'${p:+,.0f}' for p in pnls],
+            textposition='outside'
         ))
 
-        # Initial capital line
-        fig.add_hline(
-            y=self.monitor.initial_capital,
-            line_dash="dash",
-            line_color="#666",
-            annotation_text=f"Initial: ${self.monitor.initial_capital:,.0f}"
-        )
+        # Zero line
+        fig.add_hline(y=0, line_dash="solid", line_color="#666", line_width=1)
 
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
             font=dict(color='#e0e0e0'),
-            margin=dict(l=50, r=20, t=30, b=50),
+            margin=dict(l=50, r=20, t=30, b=80),
             height=350,
             xaxis=dict(
-                showgrid=True,
-                gridcolor='rgba(255,255,255,0.1)',
-                title=''
+                showgrid=False,
+                title='',
+                tickangle=-45
             ),
             yaxis=dict(
                 showgrid=True,
                 gridcolor='rgba(255,255,255,0.1)',
-                title='Equity ($)'
+                title='Unrealized PnL ($)'
             ),
             showlegend=False
         )
 
         chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
 
+        pnl_color = '#00e676' if unrealized_pnl >= 0 else '#ff5252'
         return f"""
         <div class="card">
-            <h2>Equity Curve</h2>
+            <h2>Unrealized PnL <span style="color: {pnl_color}; float: right;">${unrealized_pnl:+,.2f}</span></h2>
             <div class="chart-container">
                 {chart_html}
             </div>
