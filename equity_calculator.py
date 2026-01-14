@@ -263,7 +263,10 @@ class EquityCurveCalculator:
         for ts, realized, fee in sorted(realized_events):
             cumulative_realized += realized
             cumulative_fees += fee
-            mask = combined.index >= ts
+            # Use > instead of >= to avoid double-counting at exit_date
+            # At exit_date: unrealized still shows the trade
+            # After exit_date: unrealized=0, realized takes over
+            mask = combined.index > ts
             combined.loc[mask, 'realized_pnl'] = cumulative_realized
             combined.loc[mask, 'fees'] = cumulative_fees
 
