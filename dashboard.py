@@ -66,17 +66,21 @@ class TradeDashboard:
     - Auto-refresh capability
     """
 
-    def __init__(self, monitor: TradeMonitor, title: str = "Trade Monitor Dashboard"):
+    def __init__(self, monitor: TradeMonitor, title: str = "Trade Monitor Dashboard",
+                 ib_port: int = 7497):
         """
         Initialize dashboard.
 
         Args:
             monitor: TradeMonitor instance
             title: Dashboard title
+            ib_port: TWS/IB Gateway port for historical data
         """
         self.monitor = monitor
         self.title = title
         self.last_update = datetime.now()
+        self.ib_port = ib_port
+        self._equity_calc = None
 
     def generate_html(self, auto_refresh: int = 0) -> str:
         """
@@ -665,11 +669,34 @@ class TradeDashboard:
         </div>
         """
 
+    def _sync_trades_to_equity_calc(self):
+        """Sync trades from monitor to equity calculator."""
+        if not EQUITY_CALC_AVAILABLE:
+            return None
+
+        if self._equity_calc is None:
+            self._equity_calc = EquityCurveCalculator(ib_port=self.ib_port)
+
+        # Sync open trades from monitor
+        for trade in self.monitor.open_trades:
+            exists = any(t.symbol == trade.symbol and not t.is_closed
+                        for t in self._equity_calc.trades)
+            if not exists:
+                self._equity_calc.add_trade(
+                    symbol=trade.symbol,
+                    direction=trade.direction.value,
+                    entry_date=trade.entry_date,
+                    entry_price=trade.entry_price,
+                    quantity=trade.entry_quantity,
+                    entry_commission=trade.commission
+                )
+
+        return self._equity_calc
+
     def _generate_capital_curve(self, hours: int = 8, days: int = 7) -> str:
         """Generate capital curve (Realized + Unrealized PnL over time).
 
-        First tries to use historical minute data from trades_history.json.
-        Falls back to live PnL history if no trade data available.
+        Syncs trades from TWS and calculates curve from IB historical data.
         """
         if not PLOTLY_AVAILABLE:
             return """
@@ -681,11 +708,12 @@ class TradeDashboard:
 
         data = []
 
-        # Try historical equity calculator first (from minute data)
+        # Sync trades from monitor and calculate equity curve
         if EQUITY_CALC_AVAILABLE:
             try:
-                calc = EquityCurveCalculator()
-                data = calc.get_equity_curve_data(days=days)
+                calc = self._sync_trades_to_equity_calc()
+                if calc and calc.trades:
+                    data = calc.get_equity_curve_data(days=days)
             except Exception as e:
                 print(f"Equity calc error: {e}")
 
@@ -702,7 +730,7 @@ class TradeDashboard:
             <div class="card">
                 <h2>Kapitalkurve (R+U PnL)</h2>
                 <p style="color: #888; text-align: center; padding: 20px;">
-                    Keine Daten. Starte: python equity_calculator.py --import-tws
+                    Keine Trades im Monitor. Verbinde mit TWS.
                 </p>
             </div>
             """
