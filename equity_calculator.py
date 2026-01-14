@@ -17,12 +17,19 @@ from dataclasses import dataclass, field
 import json
 import os
 
+# TWS/IB for historical data
+try:
+    from ib_insync import IB, Stock, util
+    IB_AVAILABLE = True
+except ImportError:
+    IB_AVAILABLE = False
+
+# Fallback to yfinance if IB not available
 try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
-    print("yfinance not installed. Install with: pip install yfinance")
 
 
 @dataclass
@@ -56,11 +63,37 @@ class EquityPoint:
 class EquityCurveCalculator:
     """Calculate equity curve from historical trade data."""
 
-    def __init__(self, trades_file: str = "trades_history.json"):
+    def __init__(self, trades_file: str = "trades_history.json", ib_port: int = 7497):
         self.trades_file = trades_file
         self.trades: List[TradeRecord] = []
         self.minute_data_cache: Dict[str, pd.DataFrame] = {}
+        self.ib_port = ib_port
+        self.ib: Optional[IB] = None
         self._load_trades()
+
+    def connect_ib(self) -> bool:
+        """Connect to TWS/IB Gateway."""
+        if not IB_AVAILABLE:
+            print("ib_insync not installed")
+            return False
+
+        if self.ib and self.ib.isConnected():
+            return True
+
+        try:
+            self.ib = IB()
+            self.ib.connect('127.0.0.1', self.ib_port, clientId=20)
+            return True
+        except Exception as e:
+            print(f"TWS connection error: {e}")
+            self.ib = None
+            return False
+
+    def disconnect_ib(self):
+        """Disconnect from TWS."""
+        if self.ib and self.ib.isConnected():
+            self.ib.disconnect()
+            self.ib = None
 
     def _load_trades(self):
         """Load trades from JSON file."""
@@ -156,32 +189,89 @@ class EquityCurveCalculator:
 
     def get_minute_data(self, symbol: str, start_date: datetime,
                         end_date: Optional[datetime] = None) -> pd.DataFrame:
-        """Get minute data for a symbol."""
-        if not YFINANCE_AVAILABLE:
-            return pd.DataFrame()
-
+        """Get minute/hourly data for a symbol from TWS or yfinance."""
         end_date = end_date or datetime.now()
         cache_key = f"{symbol}_{start_date.date()}_{end_date.date()}"
 
         if cache_key in self.minute_data_cache:
             return self.minute_data_cache[cache_key]
 
+        # Try TWS first
+        df = self._get_ib_data(symbol, start_date, end_date)
+
+        # Fallback to yfinance
+        if df.empty and YFINANCE_AVAILABLE:
+            df = self._get_yfinance_data(symbol, start_date, end_date)
+
+        if not df.empty:
+            self.minute_data_cache[cache_key] = df
+
+        return df
+
+    def _get_ib_data(self, symbol: str, start_date: datetime,
+                     end_date: datetime) -> pd.DataFrame:
+        """Fetch historical data from TWS/IB."""
+        if not self.connect_ib():
+            return pd.DataFrame()
+
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            self.ib.qualifyContracts(contract)
+
+            days_diff = (end_date - start_date).days
+
+            # IB duration string format
+            if days_diff <= 1:
+                duration = '1 D'
+                bar_size = '1 min'
+            elif days_diff <= 7:
+                duration = f'{days_diff} D'
+                bar_size = '5 mins'
+            elif days_diff <= 30:
+                duration = f'{days_diff} D'
+                bar_size = '1 hour'
+            else:
+                duration = f'{min(days_diff, 365)} D'
+                bar_size = '1 hour'
+
+            bars = self.ib.reqHistoricalData(
+                contract,
+                endDateTime=end_date,
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow='TRADES',
+                useRTH=True,
+                formatDate=1
+            )
+
+            if bars:
+                df = util.df(bars)
+                df.set_index('date', inplace=True)
+                df.rename(columns={'open': 'Open', 'high': 'High',
+                                   'low': 'Low', 'close': 'Close',
+                                   'volume': 'Volume'}, inplace=True)
+                return df
+
+        except Exception as e:
+            print(f"IB data error for {symbol}: {e}")
+
+        return pd.DataFrame()
+
+    def _get_yfinance_data(self, symbol: str, start_date: datetime,
+                           end_date: datetime) -> pd.DataFrame:
+        """Fallback: Fetch data from yfinance."""
         try:
             ticker = yf.Ticker(symbol)
-            # yfinance allows max 7 days for minute data
             days_diff = (end_date - start_date).days
 
             if days_diff <= 7:
                 df = ticker.history(start=start_date, end=end_date, interval='1m')
             else:
-                # For longer periods, use hourly data
                 df = ticker.history(start=start_date, end=end_date, interval='1h')
 
-            if not df.empty:
-                self.minute_data_cache[cache_key] = df
             return df
         except Exception as e:
-            print(f"Error fetching data for {symbol}: {e}")
+            print(f"yfinance error for {symbol}: {e}")
             return pd.DataFrame()
 
     def calculate_trade_pnl_series(self, trade: TradeRecord) -> pd.Series:
@@ -287,16 +377,43 @@ class EquityCurveCalculator:
 
         return [(idx.to_pydatetime(), row['total_pnl']) for idx, row in df.iterrows()]
 
+    def _get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current price from IB or yfinance."""
+        # Try IB first
+        if self.connect_ib():
+            try:
+                contract = Stock(symbol, 'SMART', 'USD')
+                self.ib.qualifyContracts(contract)
+                ticker = self.ib.reqMktData(contract, '', False, False)
+                self.ib.sleep(2)
+                if ticker.last and ticker.last > 0:
+                    self.ib.cancelMktData(contract)
+                    return ticker.last
+                if ticker.close and ticker.close > 0:
+                    self.ib.cancelMktData(contract)
+                    return ticker.close
+                self.ib.cancelMktData(contract)
+            except Exception as e:
+                print(f"IB price error for {symbol}: {e}")
+
+        # Fallback to yfinance
+        if YFINANCE_AVAILABLE:
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period='1d')
+                if not hist.empty:
+                    return hist['Close'].iloc[-1]
+            except Exception:
+                pass
+
+        return None
+
     def get_worst_performers(self, count: int = 3) -> List[Tuple[TradeRecord, float, float]]:
         """
         Get the worst performing open positions.
 
         Returns list of (trade, pnl_absolute, pnl_percent) sorted by pnl_percent ascending.
         """
-        if not YFINANCE_AVAILABLE:
-            print("yfinance required for performance calculation")
-            return []
-
         open_trades = [t for t in self.trades if not t.is_closed]
         if not open_trades:
             return []
@@ -304,12 +421,10 @@ class EquityCurveCalculator:
         performances = []
         for trade in open_trades:
             try:
-                # Get current price
-                ticker = yf.Ticker(trade.symbol)
-                hist = ticker.history(period='1d')
-                if hist.empty:
+                current_price = self._get_current_price(trade.symbol)
+                if current_price is None:
+                    print(f"Could not get price for {trade.symbol}")
                     continue
-                current_price = hist['Close'].iloc[-1]
 
                 # Calculate PnL
                 if trade.direction == 'LONG':
