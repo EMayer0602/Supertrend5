@@ -34,6 +34,13 @@ try:
 except ImportError:
     PNL_HISTORY_AVAILABLE = False
 
+# Historical equity calculator
+try:
+    from equity_calculator import EquityCurveCalculator
+    EQUITY_CALC_AVAILABLE = True
+except ImportError:
+    EQUITY_CALC_AVAILABLE = False
+
 try:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -658,30 +665,49 @@ class TradeDashboard:
         </div>
         """
 
-    def _generate_capital_curve(self, hours: int = 8) -> str:
-        """Generate capital curve (Realized + Unrealized PnL over time)."""
-        if not PLOTLY_AVAILABLE or not PNL_HISTORY_AVAILABLE:
+    def _generate_capital_curve(self, hours: int = 8, days: int = 7) -> str:
+        """Generate capital curve (Realized + Unrealized PnL over time).
+
+        First tries to use historical minute data from trades_history.json.
+        Falls back to live PnL history if no trade data available.
+        """
+        if not PLOTLY_AVAILABLE:
             return """
             <div class="card">
                 <h2>Kapitalkurve (R+U PnL)</h2>
-                <p style="color: #888; text-align: center; padding: 20px;">No history data available</p>
+                <p style="color: #888; text-align: center; padding: 20px;">Plotly not available</p>
+            </div>
+            """
+
+        data = []
+
+        # Try historical equity calculator first (from minute data)
+        if EQUITY_CALC_AVAILABLE:
+            try:
+                calc = EquityCurveCalculator()
+                data = calc.get_equity_curve_data(days=days)
+            except Exception as e:
+                print(f"Equity calc error: {e}")
+
+        # Fall back to live PnL history
+        if not data and PNL_HISTORY_AVAILABLE:
+            try:
+                history = PnLHistory()
+                data = history.get_total_pnl_curve(hours=hours)
+            except Exception:
+                pass
+
+        if len(data) < 2:
+            return """
+            <div class="card">
+                <h2>Kapitalkurve (R+U PnL)</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">
+                    Keine Daten. Starte: python equity_calculator.py --import-tws
+                </p>
             </div>
             """
 
         try:
-            history = PnLHistory()
-            data = history.get_total_pnl_curve(hours=hours)
-
-            if len(data) < 2:
-                return """
-                <div class="card">
-                    <h2>Kapitalkurve (R+U PnL)</h2>
-                    <p style="color: #888; text-align: center; padding: 20px;">
-                        Recording data... Curve will appear after a few updates.
-                    </p>
-                </div>
-                """
-
             timestamps = [d[0] for d in data]
             values = [d[1] for d in data]
 
