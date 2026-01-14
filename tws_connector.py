@@ -208,31 +208,36 @@ class TWSConnector:
             # Request account PnL first
             try:
                 self.ib.reqPnL(account_id)
-                self.ib.sleep(1)  # Wait for PnL subscription
+                self.ib.sleep(2)  # Wait longer for PnL subscription
 
                 # Check if we got account PnL
                 pnl_data = self.ib.pnl()
+                print(f"DEBUG: pnl() returned {len(pnl_data)} items")
                 for pnl in pnl_data:
-                    if pnl.account == account_id:
-                        print(f"DEBUG: Account PnL - Daily: {pnl.dailyPnL}, Unrealized: {pnl.unrealizedPnL}, Realized: {pnl.realizedPnL}")
+                    print(f"DEBUG: Account PnL - Account: {pnl.account}, Daily: {pnl.dailyPnL}, Unreal: {pnl.unrealizedPnL}, Real: {pnl.realizedPnL}")
 
                 # Request PnL for each position
+                print(f"DEBUG: Requesting PnL for {len([i for i in portfolio if i.position != 0])} positions...")
                 for item in portfolio:
                     if item.contract.conId and item.position != 0:
                         try:
                             self.ib.reqPnLSingle(account_id, '', item.contract.conId)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"DEBUG: reqPnLSingle error for {item.contract.symbol}: {e}")
 
                 # Wait for all PnL data to arrive
-                self.ib.sleep(2)
+                self.ib.sleep(3)
 
                 # Now read the pnlSingle data
                 pnl_singles = self.ib.pnlSingle()
+                print(f"DEBUG: pnlSingle() returned {len(pnl_singles)} items")
+
                 for pnl in pnl_singles:
+                    print(f"DEBUG: PnLSingle conId={pnl.conId}, daily={pnl.dailyPnL}, unreal={pnl.unrealizedPnL}")
                     if pnl.dailyPnL is not None and not math.isnan(pnl.dailyPnL):
                         daily_pnl_by_conid[pnl.conId] = pnl.dailyPnL
-                        print(f"DEBUG: {pnl.conId} daily PnL: {pnl.dailyPnL}")
+
+                print(f"DEBUG: Got daily PnL for {len(daily_pnl_by_conid)} positions")
 
             except Exception as e:
                 print(f"Note: Could not get daily PnL: {e}")
