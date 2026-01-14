@@ -243,7 +243,11 @@ class TWSConnector:
                 print(f"Note: Could not get daily PnL: {e}")
 
         for item in portfolio:
-            daily_pnl = daily_pnl_by_conid.get(item.contract.conId, 0.0)
+            con_id = item.contract.conId
+            daily_pnl = daily_pnl_by_conid.get(con_id, 0.0)
+            if daily_pnl == 0.0 and con_id in daily_pnl_by_conid:
+                daily_pnl = daily_pnl_by_conid[con_id]  # Could be 0.0 from TWS
+            print(f"DEBUG MAP: {item.contract.symbol} conId={con_id} found={con_id in daily_pnl_by_conid} daily={daily_pnl}")
             pos_info = TWPositionInfo(
                 symbol=item.contract.symbol,
                 sec_type=item.contract.secType,
