@@ -67,7 +67,7 @@ class TradeDashboard:
     """
 
     def __init__(self, monitor: TradeMonitor, title: str = "Trade Monitor Dashboard",
-                 ib_port: int = 7497):
+                 ib_port: int = 7497, ib_connection=None):
         """
         Initialize dashboard.
 
@@ -75,11 +75,13 @@ class TradeDashboard:
             monitor: TradeMonitor instance
             title: Dashboard title
             ib_port: TWS/IB Gateway port for historical data
+            ib_connection: Existing IB connection to reuse
         """
         self.monitor = monitor
         self.title = title
         self.last_update = datetime.now()
         self.ib_port = ib_port
+        self.ib_connection = ib_connection
         self._equity_calc = None
 
     def generate_html(self, auto_refresh: int = 0) -> str:
@@ -675,7 +677,11 @@ class TradeDashboard:
             return None
 
         if self._equity_calc is None:
-            self._equity_calc = EquityCurveCalculator(ib_port=self.ib_port)
+            # Pass existing IB connection to avoid multiple connections
+            self._equity_calc = EquityCurveCalculator(
+                ib_port=self.ib_port,
+                ib_connection=self.ib_connection
+            )
 
         # Sync open trades from monitor
         for trade in self.monitor.open_trades:

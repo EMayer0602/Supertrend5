@@ -1,0 +1,24 @@
+[
+  {
+    "symbol": "AAPL",
+    "direction": "LONG",
+    "entry_date": "2026-01-09T18:36:26.986981",
+    "entry_price": 180.0,
+    "quantity": 100,
+    "exit_date": null,
+    "exit_price": null,
+    "entry_commission": 1.0,
+    "exit_commission": 0.0
+  },
+  {
+    "symbol": "MSFT",
+    "direction": "LONG",
+    "entry_date": "2026-01-11T18:36:26.987004",
+    "entry_price": 400.0,
+    "quantity": 50,
+    "exit_date": null,
+    "exit_price": null,
+    "entry_commission": 1.0,
+    "exit_commission": 0.0
+  }
+]

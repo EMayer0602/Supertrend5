@@ -77,9 +77,9 @@ def main():
         print("  3. Socket port is correct (7496 for TWS, 4001 for IB Gateway)")
         return
 
-    # Create dashboard with same IB port for historical data
+    # Create dashboard with same IB connection for historical data
     connected_port = connector.port
-    dashboard = TradeDashboard(monitor, ib_port=connected_port)
+    dashboard = TradeDashboard(monitor, ib_port=connected_port, ib_connection=connector.ib)
     html_file = 'tws_dashboard.html'
 
     # Initial update

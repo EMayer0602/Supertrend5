@@ -63,12 +63,14 @@ class EquityPoint:
 class EquityCurveCalculator:
     """Calculate equity curve from historical trade data."""
 
-    def __init__(self, trades_file: str = "trades_history.json", ib_port: int = 7497):
+    def __init__(self, trades_file: str = "trades_history.json", ib_port: int = 7497,
+                 ib_connection: Optional['IB'] = None):
         self.trades_file = trades_file
         self.trades: List[TradeRecord] = []
         self.minute_data_cache: Dict[str, pd.DataFrame] = {}
         self.ib_port = ib_port
-        self.ib: Optional[IB] = None
+        self.ib: Optional[IB] = ib_connection  # Use existing connection if provided
+        self._owns_connection = ib_connection is None  # Only disconnect if we created it
         self._load_trades()
 
     def connect_ib(self) -> bool:
@@ -83,6 +85,7 @@ class EquityCurveCalculator:
         try:
             self.ib = IB()
             self.ib.connect('127.0.0.1', self.ib_port, clientId=20)
+            self._owns_connection = True
             return True
         except Exception as e:
             print(f"TWS connection error: {e}")
@@ -90,8 +93,8 @@ class EquityCurveCalculator:
             return False
 
     def disconnect_ib(self):
-        """Disconnect from TWS."""
-        if self.ib and self.ib.isConnected():
+        """Disconnect from TWS (only if we created the connection)."""
+        if self._owns_connection and self.ib and self.ib.isConnected():
             self.ib.disconnect()
             self.ib = None
 
