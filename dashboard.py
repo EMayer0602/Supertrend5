@@ -850,6 +850,7 @@ def main():
         # Try to connect to TWS
         try:
             from tws_connector import TWSConnector, print_tws_status
+            import time
 
             print(f"Connecting to TWS at {args.host}:{args.port}...")
             connector = TWSConnector(host=args.host, port=args.port)
@@ -859,13 +860,31 @@ def main():
 
                 # Create monitor from TWS
                 monitor = TradeMonitor(initial_capital=10000.0, symbol="TWS Portfolio")
+
+                # Initial sync
                 connector.sync_to_monitor(monitor)
 
                 # Create dashboard
                 dashboard = TradeDashboard(monitor, title="TWS Trade Monitor")
                 dashboard.open_in_browser(args.output, auto_refresh=args.refresh)
 
-                input("Press Enter to disconnect...")
+                if args.refresh > 0:
+                    print(f"\nLive mode: updating every {args.refresh} seconds")
+                    print("Press Ctrl+C to stop...")
+                    try:
+                        while True:
+                            time.sleep(args.refresh)
+                            # Clear and resync
+                            monitor.open_trades.clear()
+                            monitor.all_trades.clear()
+                            connector.sync_to_monitor(monitor)
+                            dashboard.save(args.output, auto_refresh=args.refresh)
+                            print(f"  Updated: {len(monitor.open_trades)} positions, Daily PnL: ${monitor.tws_daily_pnl or 0:+,.2f}")
+                    except KeyboardInterrupt:
+                        print("\nStopping...")
+                else:
+                    input("Press Enter to disconnect...")
+
                 connector.disconnect()
             else:
                 print("Could not connect to TWS. Using demo data...")
