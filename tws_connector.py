@@ -205,42 +205,35 @@ class TWSConnector:
             account_id = portfolio[0].account
             import math
 
-            # Request account PnL first
-            try:
-                self.ib.reqPnL(account_id)
-                self.ib.sleep(2)  # Wait longer for PnL subscription
+            # Check existing subscriptions first
+            pnl_singles = self.ib.pnlSingle()
 
-                # Check if we got account PnL
-                pnl_data = self.ib.pnl()
-                print(f"DEBUG: pnl() returned {len(pnl_data)} items")
-                for pnl in pnl_data:
-                    print(f"DEBUG: Account PnL - Account: {pnl.account}, Daily: {pnl.dailyPnL}, Unreal: {pnl.unrealizedPnL}, Real: {pnl.realizedPnL}")
+            # If no subscriptions yet, create them
+            if not pnl_singles:
+                print(f"DEBUG: Setting up PnL subscriptions for {len(portfolio)} positions...")
+                try:
+                    self.ib.reqPnL(account_id)
+                except Exception:
+                    pass
 
-                # Request PnL for each position
-                print(f"DEBUG: Requesting PnL for {len([i for i in portfolio if i.position != 0])} positions...")
                 for item in portfolio:
                     if item.contract.conId and item.position != 0:
                         try:
                             self.ib.reqPnLSingle(account_id, '', item.contract.conId)
-                        except Exception as e:
-                            print(f"DEBUG: reqPnLSingle error for {item.contract.symbol}: {e}")
+                        except Exception:
+                            pass
 
-                # Wait for all PnL data to arrive
+                # Wait for subscriptions to populate
                 self.ib.sleep(3)
-
-                # Now read the pnlSingle data
                 pnl_singles = self.ib.pnlSingle()
-                print(f"DEBUG: pnlSingle() returned {len(pnl_singles)} items")
 
-                for pnl in pnl_singles:
-                    print(f"DEBUG: PnLSingle conId={pnl.conId}, daily={pnl.dailyPnL}, unreal={pnl.unrealizedPnL}")
-                    if pnl.dailyPnL is not None and not math.isnan(pnl.dailyPnL):
-                        daily_pnl_by_conid[pnl.conId] = pnl.dailyPnL
+            # Read the pnlSingle data
+            print(f"DEBUG: pnlSingle() has {len(pnl_singles)} items")
+            for pnl in pnl_singles:
+                if pnl.dailyPnL is not None and not math.isnan(pnl.dailyPnL):
+                    daily_pnl_by_conid[pnl.conId] = pnl.dailyPnL
 
-                print(f"DEBUG: Got daily PnL for {len(daily_pnl_by_conid)} positions")
-
-            except Exception as e:
-                print(f"Note: Could not get daily PnL: {e}")
+            print(f"DEBUG: Got daily PnL for {len(daily_pnl_by_conid)} positions")
 
         for item in portfolio:
             con_id = item.contract.conId
