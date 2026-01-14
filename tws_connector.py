@@ -185,13 +185,17 @@ class TWSConnector:
                 self.ib.sleep(0.5)  # Wait for PnL data
 
                 # Request PnL for each position to get daily PnL
+                import math
                 for item in portfolio:
                     if item.contract.conId and item.position != 0:
                         try:
                             pnl_single = self.ib.reqPnLSingle(account_id, '', item.contract.conId)
                             self.ib.sleep(0.1)  # Brief wait
-                            if pnl_single and pnl_single.dailyPnL:
-                                daily_pnl_by_conid[item.contract.conId] = pnl_single.dailyPnL
+                            if pnl_single and pnl_single.dailyPnL is not None:
+                                daily_val = pnl_single.dailyPnL
+                                # Check for NaN
+                                if not math.isnan(daily_val):
+                                    daily_pnl_by_conid[item.contract.conId] = daily_val
                         except Exception:
                             pass
             except Exception as e:
@@ -394,7 +398,8 @@ class TWSConnector:
                 total_unrealized += pos.unrealized_pnl
 
                 # Print position info
-                daily_str = f"${pos.daily_pnl:+,.0f}" if pos.daily_pnl else "-"
+                import math
+                daily_str = f"${pos.daily_pnl:+,.0f}" if pos.daily_pnl and not math.isnan(pos.daily_pnl) else "-"
                 pnl_str = f"${pos.unrealized_pnl:+,.2f}" if pos.unrealized_pnl else "$0.00"
                 print(f"  {pos.symbol:<8} {pos.position:>8.0f} @ ${avg_cost_per_share:>8.2f}  "
                       f"Mkt: ${pos.market_price:>8.2f}  Daily: {daily_str:>8}  PnL: {pnl_str}")

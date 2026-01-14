@@ -457,7 +457,8 @@ class TradeDashboard:
             current_price = trade.current_price or self.monitor.current_prices.get(trade.symbol, 0)
             pnl_pct = trade.calculate_unrealized_pnl_pct(current_price) if current_price > 0 else 0
             current_price_str = f"${current_price:,.2f}" if current_price > 0 else "-"
-            daily_pnl_str = f"${trade.daily_pnl:+,.0f}" if trade.daily_pnl else "-"
+            import math
+            daily_pnl_str = f"${trade.daily_pnl:+,.0f}" if trade.daily_pnl and not math.isnan(trade.daily_pnl) else "-"
 
             rows += f"""
             <tr>

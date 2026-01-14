@@ -56,7 +56,8 @@ def main():
 
     # Generate HTML dashboard
     dashboard = TradeDashboard(monitor)
-    html_file = dashboard.generate_html('tws_dashboard.html')
+    html_file = 'tws_dashboard.html'
+    dashboard.save(html_file, auto_refresh=30)  # Refresh every 30 seconds
 
     print(f"\nDashboard saved to: {html_file}")
 
