@@ -131,8 +131,13 @@ class TWSConnector:
 
             if self._connected:
                 print(f"Connected to TWS at {self.host}:{self.port}")
+                # Request all managed accounts
+                accounts = self.ib.managedAccounts()
+                print(f"Managed accounts: {accounts}")
+                # Request positions for all accounts
+                self.ib.reqPositions()
                 # Wait for account data to be ready
-                self.ib.sleep(1)
+                self.ib.sleep(2)
             else:
                 print("Failed to connect to TWS")
 
@@ -170,8 +175,27 @@ class TWSConnector:
 
         positions = []
 
+        # Wait for TWS to send all position data
+        self.ib.sleep(1)
+
         # Get portfolio items (includes market values)
         portfolio = self.ib.portfolio()
+
+        # Also check positions() which might have more items
+        all_positions = self.ib.positions()
+        print(f"DEBUG: portfolio() returned {len(portfolio)} items")
+        print(f"DEBUG: positions() returned {len(all_positions)} items")
+
+        # If positions has more items, we need to reconcile
+        portfolio_symbols = {item.contract.symbol for item in portfolio}
+        position_symbols = {pos.contract.symbol for pos in all_positions}
+        missing = position_symbols - portfolio_symbols
+        if missing:
+            print(f"DEBUG: Missing from portfolio: {missing}")
+
+        # Get all unique accounts
+        accounts = set(item.account for item in portfolio) | set(pos.account for pos in all_positions)
+        print(f"DEBUG: Accounts: {accounts}")
 
         # Request PnL for account to get daily PnL per position
         account_id = ""
