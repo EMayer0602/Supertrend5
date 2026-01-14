@@ -35,7 +35,8 @@ class TradeRecord:
     quantity: int
     exit_date: Optional[datetime] = None
     exit_price: Optional[float] = None
-    commission: float = 0.0  # Total commission (entry + exit)
+    entry_commission: float = 0.0  # Commission at entry (deducted immediately)
+    exit_commission: float = 0.0   # Commission at exit (deducted at close)
 
     @property
     def is_closed(self) -> bool:
@@ -68,6 +69,16 @@ class EquityCurveCalculator:
                 with open(self.trades_file, 'r') as f:
                     data = json.load(f)
                     for t in data:
+                        # Support old format (single commission) and new format (entry/exit)
+                        if 'entry_commission' in t:
+                            entry_comm = t['entry_commission']
+                            exit_comm = t.get('exit_commission', 0.0)
+                        else:
+                            # Old format: split commission evenly or assign to entry
+                            old_comm = t.get('commission', 0.0)
+                            entry_comm = old_comm / 2 if t.get('exit_date') else old_comm
+                            exit_comm = old_comm / 2 if t.get('exit_date') else 0.0
+
                         self.trades.append(TradeRecord(
                             symbol=t['symbol'],
                             direction=t['direction'],
@@ -76,7 +87,8 @@ class EquityCurveCalculator:
                             quantity=t['quantity'],
                             exit_date=datetime.fromisoformat(t['exit_date']) if t.get('exit_date') else None,
                             exit_price=t.get('exit_price'),
-                            commission=t.get('commission', 0.0)
+                            entry_commission=entry_comm,
+                            exit_commission=exit_comm
                         ))
             except Exception as e:
                 print(f"Error loading trades: {e}")
@@ -93,21 +105,22 @@ class EquityCurveCalculator:
                 'quantity': t.quantity,
                 'exit_date': t.exit_date.isoformat() if t.exit_date else None,
                 'exit_price': t.exit_price,
-                'commission': t.commission
+                'entry_commission': t.entry_commission,
+                'exit_commission': t.exit_commission
             })
         with open(self.trades_file, 'w') as f:
             json.dump(data, f, indent=2)
 
     def add_trade(self, symbol: str, direction: str, entry_date: datetime,
-                  entry_price: float, quantity: int, commission: float = 0.0):
-        """Add a new trade."""
+                  entry_price: float, quantity: int, entry_commission: float = 0.0):
+        """Add a new trade. Entry commission is deducted immediately from PnL."""
         trade = TradeRecord(
             symbol=symbol,
             direction=direction,
             entry_date=entry_date,
             entry_price=entry_price,
             quantity=quantity,
-            commission=commission
+            entry_commission=entry_commission
         )
         self.trades.append(trade)
         self._save_trades()
@@ -115,12 +128,12 @@ class EquityCurveCalculator:
 
     def close_trade(self, symbol: str, exit_date: datetime, exit_price: float,
                     exit_commission: float = 0.0):
-        """Close an open trade."""
+        """Close an open trade. Exit commission is deducted from realized PnL."""
         for trade in self.trades:
             if trade.symbol == symbol and not trade.is_closed:
                 trade.exit_date = exit_date
                 trade.exit_price = exit_price
-                trade.commission += exit_commission
+                trade.exit_commission = exit_commission
                 self._save_trades()
                 return trade
         return None
@@ -137,7 +150,7 @@ class EquityCurveCalculator:
                     entry_date=trade.entry_date,
                     entry_price=trade.entry_price,
                     quantity=trade.entry_quantity,
-                    commission=trade.commission
+                    entry_commission=trade.commission  # Entry commission from TWS
                 )
         self._save_trades()
 
@@ -172,7 +185,10 @@ class EquityCurveCalculator:
             return pd.DataFrame()
 
     def calculate_trade_pnl_series(self, trade: TradeRecord) -> pd.Series:
-        """Calculate PnL series for a single trade."""
+        """
+        Calculate PnL series for a single trade.
+        Entry commission is deducted from the start (affects unrealized PnL).
+        """
         end_date = trade.exit_date or datetime.now()
         df = self.get_minute_data(trade.symbol, trade.entry_date, end_date)
 
@@ -184,6 +200,9 @@ class EquityCurveCalculator:
             pnl = (df['Close'] - trade.entry_price) * trade.quantity
         else:  # SHORT
             pnl = (trade.entry_price - df['Close']) * trade.quantity
+
+        # Deduct entry commission from start (affects all unrealized PnL points)
+        pnl = pnl - trade.entry_commission
 
         return pnl
 
@@ -222,9 +241,11 @@ class EquityCurveCalculator:
                     realized = (trade.exit_price - trade.entry_price) * trade.quantity
                 else:
                     realized = (trade.entry_price - trade.exit_price) * trade.quantity
-                realized -= trade.commission
-                realized_events.append((trade.exit_date, realized, trade.commission))
-                total_fees += trade.commission
+                # Deduct both entry and exit commissions
+                total_commission = trade.entry_commission + trade.exit_commission
+                realized -= total_commission
+                realized_events.append((trade.exit_date, realized, total_commission))
+                total_fees += total_commission
 
         if not all_pnl:
             return pd.DataFrame()
@@ -263,6 +284,83 @@ class EquityCurveCalculator:
 
         return [(idx.to_pydatetime(), row['total_pnl']) for idx, row in df.iterrows()]
 
+    def get_worst_performers(self, count: int = 3) -> List[Tuple[TradeRecord, float, float]]:
+        """
+        Get the worst performing open positions.
+
+        Returns list of (trade, pnl_absolute, pnl_percent) sorted by pnl_percent ascending.
+        """
+        if not YFINANCE_AVAILABLE:
+            print("yfinance required for performance calculation")
+            return []
+
+        open_trades = [t for t in self.trades if not t.is_closed]
+        if not open_trades:
+            return []
+
+        performances = []
+        for trade in open_trades:
+            try:
+                # Get current price
+                ticker = yf.Ticker(trade.symbol)
+                hist = ticker.history(period='1d')
+                if hist.empty:
+                    continue
+                current_price = hist['Close'].iloc[-1]
+
+                # Calculate PnL
+                if trade.direction == 'LONG':
+                    pnl_absolute = (current_price - trade.entry_price) * trade.quantity
+                else:  # SHORT
+                    pnl_absolute = (trade.entry_price - current_price) * trade.quantity
+
+                # Calculate percentage return
+                cost_basis = trade.entry_price * trade.quantity
+                pnl_percent = (pnl_absolute / cost_basis) * 100 if cost_basis > 0 else 0
+
+                performances.append((trade, pnl_absolute, pnl_percent, current_price))
+            except Exception as e:
+                print(f"Error getting price for {trade.symbol}: {e}")
+                continue
+
+        # Sort by percentage (ascending = worst first)
+        performances.sort(key=lambda x: x[2])
+
+        # Return top N worst
+        return [(t, pnl, pct) for t, pnl, pct, _ in performances[:count]]
+
+    def print_worst_performers(self, count: int = 3):
+        """Print the worst performing positions."""
+        worst = self.get_worst_performers(count)
+
+        if not worst:
+            print("No open positions to analyze")
+            return
+
+        print(f"\n{'='*60}")
+        print(f"TOP {count} SCHLECHTESTE PERFORMER")
+        print(f"{'='*60}")
+        print(f"{'Symbol':<10} {'Richtung':<8} {'Einstieg':>10} {'PnL $':>12} {'PnL %':>10}")
+        print("-" * 60)
+
+        for trade, pnl_abs, pnl_pct in worst:
+            print(f"{trade.symbol:<10} {trade.direction:<8} ${trade.entry_price:>9.2f} "
+                  f"${pnl_abs:>+11.2f} {pnl_pct:>+9.2f}%")
+
+        print("-" * 60)
+        total_loss = sum(pnl for _, pnl, _ in worst)
+        print(f"{'Gesamt Verlust:':<30} ${total_loss:>+11.2f}")
+
+        return worst
+
+    def suggest_sells(self, count: int = 3) -> List[str]:
+        """
+        Suggest symbols to sell (worst performers).
+        Returns list of symbols.
+        """
+        worst = self.get_worst_performers(count)
+        return [trade.symbol for trade, _, _ in worst]
+
     def print_summary(self):
         """Print summary of trades and equity."""
         print(f"\n{'='*60}")
@@ -283,9 +381,10 @@ class EquityCurveCalculator:
                 pnl = (t.exit_price - t.entry_price) * t.quantity
             else:
                 pnl = (t.entry_price - t.exit_price) * t.quantity
-            pnl -= t.commission
+            total_commission = t.entry_commission + t.exit_commission
+            pnl -= total_commission
             total_realized += pnl
-            total_fees += t.commission
+            total_fees += total_commission
 
         print(f"\nRealized PnL: ${total_realized:+,.2f}")
         print(f"Total Fees: ${total_fees:,.2f}")
@@ -318,6 +417,8 @@ def main():
                         help='Close trade: SYMBOL PRICE YYYY-MM-DD')
     parser.add_argument('--list', action='store_true', help='List all trades')
     parser.add_argument('--calc', action='store_true', help='Calculate equity curve')
+    parser.add_argument('--worst', type=int, nargs='?', const=3, metavar='N',
+                        help='Show N worst performers (default: 3)')
     parser.add_argument('--days', type=int, default=7, help='Days for calculation')
     args = parser.parse_args()
 
@@ -346,7 +447,7 @@ def main():
                             entry_date=trade.entry_date,
                             entry_price=trade.entry_price,
                             quantity=trade.entry_quantity,
-                            commission=trade.commission
+                            entry_commission=trade.commission
                         )
                         print(f"  Added: {trade.symbol} {trade.entry_quantity} @ ${trade.entry_price:.2f}")
                     else:
@@ -379,6 +480,9 @@ def main():
     elif args.list:
         calc.print_summary()
 
+    elif args.worst:
+        calc.print_worst_performers(args.worst)
+
     elif args.calc:
         print(f"Calculating equity curve for {args.days} days...")
         data = calc.get_equity_curve_data(args.days)
@@ -395,6 +499,8 @@ def main():
         print("  python equity_calculator.py --import-tws  # Import from TWS")
         print("  python equity_calculator.py --list        # List trades")
         print("  python equity_calculator.py --calc        # Calculate curve")
+        print("  python equity_calculator.py --worst       # Show 3 worst performers")
+        print("  python equity_calculator.py --worst 5     # Show 5 worst performers")
 
 
 if __name__ == "__main__":
