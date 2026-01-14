@@ -366,36 +366,47 @@ class TradeDashboard:
         win_rate = stats.get('Win Rate', '0%')
         total_trades = stats.get('Total Trades', 0)
         open_trades = stats.get('Open Trades', len(self.monitor.open_trades))
-        unrealized = self._parse_currency(stats.get('Unrealized PnL', '$0'))
+        unrealized = self.monitor.get_unrealized_pnl()
+        daily_pnl = self.monitor.get_daily_pnl()
+        total_equity = self.monitor.get_total_equity()
 
         profit_class = 'positive' if net_profit >= 0 else 'negative'
         unrealized_class = 'positive' if unrealized >= 0 else 'negative'
+        daily_pnl_class = 'positive' if daily_pnl >= 0 else 'negative'
 
         return f"""
         <div class="summary-cards">
             <div class="summary-card">
-                <div class="label">Net Profit</div>
-                <div class="value {profit_class}">${net_profit:,.2f}</div>
+                <div class="label">Total Equity</div>
+                <div class="value neutral">${total_equity:,.2f}</div>
             </div>
             <div class="summary-card">
-                <div class="label">Total Return</div>
-                <div class="value {'positive' if not total_return.startswith('-') else 'negative'}">{total_return}</div>
+                <div class="label">Daily PnL</div>
+                <div class="value {daily_pnl_class}">${daily_pnl:+,.2f}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Unrealized PnL</div>
+                <div class="value {unrealized_class}">${unrealized:+,.2f}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Net Profit</div>
+                <div class="value {profit_class}">${net_profit:,.2f}</div>
             </div>
             <div class="summary-card">
                 <div class="label">Win Rate</div>
                 <div class="value neutral">{win_rate}</div>
             </div>
             <div class="summary-card">
-                <div class="label">Total Trades</div>
-                <div class="value neutral">{total_trades}</div>
-            </div>
-            <div class="summary-card">
                 <div class="label">Open Positions</div>
                 <div class="value neutral">{open_trades}</div>
             </div>
             <div class="summary-card">
-                <div class="label">Unrealized PnL</div>
-                <div class="value {unrealized_class}">${unrealized:,.2f}</div>
+                <div class="label">Total Trades</div>
+                <div class="value neutral">{total_trades}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Total Return</div>
+                <div class="value {'positive' if not total_return.startswith('-') else 'negative'}">{total_return}</div>
             </div>
         </div>
         """
@@ -446,7 +457,11 @@ class TradeDashboard:
         for trade in self.monitor.open_trades:
             direction_badge = 'badge-long' if trade.direction == TradeDirection.LONG else 'badge-short'
             pnl_class = 'pnl-positive' if trade.unrealized_pnl >= 0 else 'pnl-negative'
-            pnl_pct = trade.calculate_unrealized_pnl_pct(self.monitor.current_price) if self.monitor.current_price > 0 else 0
+
+            # Get current price for this specific symbol
+            current_price = trade.current_price or self.monitor.current_prices.get(trade.symbol, 0)
+            pnl_pct = trade.calculate_unrealized_pnl_pct(current_price) if current_price > 0 else 0
+            current_price_str = f"${current_price:,.2f}" if current_price > 0 else "-"
 
             rows += f"""
             <tr>
@@ -455,7 +470,7 @@ class TradeDashboard:
                 <td><span class="badge {direction_badge}">{trade.direction.value}</span></td>
                 <td>{trade.entry_date.strftime('%Y-%m-%d %H:%M')}</td>
                 <td>${trade.entry_price:,.2f}</td>
-                <td>${self.monitor.current_price:,.2f}</td>
+                <td>{current_price_str}</td>
                 <td>{trade.entry_quantity}</td>
                 <td class="{pnl_class}">${trade.unrealized_pnl:,.2f}</td>
                 <td class="{pnl_class}">{pnl_pct:+.2f}%</td>
@@ -750,24 +765,24 @@ class TradeDashboard:
 
 
 def create_demo_monitor() -> TradeMonitor:
-    """Create a demo monitor with sample trades."""
-    monitor = TradeMonitor(initial_capital=10000.0, symbol="DEMO")
+    """Create a demo monitor with sample trades for multiple symbols."""
+    monitor = TradeMonitor(initial_capital=50000.0, symbol="Portfolio")
 
-    # Add some demo trades
-    trades_data = [
-        (100.0, 112.0, "signal", TradeDirection.LONG, 5),
-        (108.0, 102.0, "stop_loss", TradeDirection.LONG, 3),
-        (105.0, 118.0, "take_profit", TradeDirection.LONG, 8),
-        (115.0, 108.0, "signal", TradeDirection.SHORT, 4),
-        (110.0, 125.0, "trailing_stop", TradeDirection.LONG, 6),
-        (120.0, 115.0, "signal", TradeDirection.LONG, 2),
-        (118.0, 130.0, "signal", TradeDirection.LONG, 5),
-        (125.0, 122.0, "stop_loss", TradeDirection.LONG, 3),
+    # Demo closed trades with different symbols
+    closed_trades_data = [
+        ("AAPL", 150.0, 168.0, "signal", TradeDirection.LONG, 5, 30),
+        ("MSFT", 320.0, 305.0, "stop_loss", TradeDirection.LONG, 3, 20),
+        ("GOOGL", 140.0, 158.0, "take_profit", TradeDirection.LONG, 8, 25),
+        ("TSLA", 250.0, 235.0, "signal", TradeDirection.SHORT, 4, 15),
+        ("NVDA", 480.0, 520.0, "trailing_stop", TradeDirection.LONG, 6, 10),
+        ("AMZN", 180.0, 175.0, "signal", TradeDirection.LONG, 2, 20),
+        ("META", 500.0, 545.0, "signal", TradeDirection.LONG, 5, 8),
+        ("AMD", 165.0, 158.0, "stop_loss", TradeDirection.LONG, 3, 25),
     ]
 
     base_date = datetime.now() - timedelta(days=60)
 
-    for i, (entry, exit_p, reason, direction, days) in enumerate(trades_data):
+    for i, (symbol, entry, exit_p, reason, direction, days, qty) in enumerate(closed_trades_data):
         entry_date = base_date + timedelta(days=i*7)
         exit_date = entry_date + timedelta(days=days)
 
@@ -775,25 +790,36 @@ def create_demo_monitor() -> TradeMonitor:
             direction=direction,
             entry_price=entry,
             entry_date=entry_date,
-            quantity=50
+            quantity=qty,
+            symbol=symbol
         )
 
         # Update price to simulate movement
         for d in range(days):
             price = entry + (exit_p - entry) * (d / days)
-            monitor.update_price(price, entry_date + timedelta(days=d))
+            monitor.update_price(price, symbol=symbol, timestamp=entry_date + timedelta(days=d))
 
         monitor.close_trade(trade, exit_p, exit_date, reason)
 
-    # Add open position
-    open_trade = monitor.open_trade(
-        direction=TradeDirection.LONG,
-        entry_price=128.0,
-        quantity=40,
-        stop_loss=120.0,
-        trailing_stop_pct=0.05
-    )
-    monitor.update_price(135.0)
+    # Add multiple open positions with different symbols and prices
+    open_positions = [
+        ("AAPL", 175.0, 182.50, 40, 168.0, 0.05),
+        ("MSFT", 415.0, 428.75, 25, 400.0, 0.04),
+        ("NVDA", 875.0, 892.30, 12, 840.0, 0.06),
+        ("GOOGL", 175.0, 171.25, 30, 165.0, None),  # Losing position
+    ]
+
+    for symbol, entry, current, qty, stop, trailing in open_positions:
+        trade = monitor.open_trade(
+            direction=TradeDirection.LONG,
+            entry_price=entry,
+            quantity=qty,
+            stop_loss=stop,
+            trailing_stop_pct=trailing,
+            symbol=symbol
+        )
+        # Update each symbol with its own current price
+        monitor.update_price(current, symbol=symbol)
 
     return monitor
 

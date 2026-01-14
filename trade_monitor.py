@@ -76,32 +76,43 @@ class Trade:
     take_profit: Optional[float] = None
     trailing_stop_pct: Optional[float] = None
     highest_price_since_entry: Optional[float] = None
+    current_price: Optional[float] = None  # Current market price for this symbol
 
     # Metadata
     strategy_name: str = "Supertrend"
     notes: str = ""
 
-    def calculate_unrealized_pnl(self, current_price: float) -> float:
+    def calculate_unrealized_pnl(self, current_price: Optional[float] = None) -> float:
         """Calculate unrealized PnL at current price."""
         if self.status != TradeStatus.OPEN:
             return 0.0
 
+        # Use provided price or stored current_price
+        price = current_price if current_price is not None else self.current_price
+        if price is None:
+            return 0.0
+
         if self.direction == TradeDirection.LONG:
-            self.unrealized_pnl = (current_price - self.entry_price) * self.entry_quantity
+            self.unrealized_pnl = (price - self.entry_price) * self.entry_quantity
         else:  # SHORT
-            self.unrealized_pnl = (self.entry_price - current_price) * self.entry_quantity
+            self.unrealized_pnl = (self.entry_price - price) * self.entry_quantity
 
         return self.unrealized_pnl
 
-    def calculate_unrealized_pnl_pct(self, current_price: float) -> float:
+    def calculate_unrealized_pnl_pct(self, current_price: Optional[float] = None) -> float:
         """Calculate unrealized PnL as percentage."""
         if self.status != TradeStatus.OPEN:
             return 0.0
 
+        # Use provided price or stored current_price
+        price = current_price if current_price is not None else self.current_price
+        if price is None or self.entry_price == 0:
+            return 0.0
+
         if self.direction == TradeDirection.LONG:
-            return (current_price - self.entry_price) / self.entry_price * 100
+            return (price - self.entry_price) / self.entry_price * 100
         else:
-            return (self.entry_price - current_price) / self.entry_price * 100
+            return (self.entry_price - price) / self.entry_price * 100
 
     def close(self, exit_price: float, exit_date: datetime, exit_reason: str = "signal"):
         """Close the trade and calculate realized PnL."""
@@ -209,9 +220,14 @@ class TradeMonitor:
         self._on_trade_close: List[Callable] = []
         self._on_equity_update: List[Callable] = []
 
-        # Price feed
-        self.current_price: float = 0.0
-        self.price_history: List[Tuple[datetime, float]] = []
+        # Price feed - per symbol
+        self.current_prices: Dict[str, float] = {}  # {symbol: price}
+        self.price_history: Dict[str, List[Tuple[datetime, float]]] = {}  # {symbol: [(time, price), ...]}
+
+        # Daily PnL tracking
+        self.daily_pnl: Dict[str, float] = {}  # {date_str: pnl}
+        self.previous_day_equity: float = initial_capital
+        self.today_start_equity: float = initial_capital
 
         # Monitoring thread (for live trading)
         self._monitoring = False
@@ -231,6 +247,7 @@ class TradeMonitor:
                    take_profit: Optional[float] = None,
                    trailing_stop_pct: Optional[float] = None,
                    strategy_name: str = "Supertrend",
+                   symbol: Optional[str] = None,
                    notes: str = "") -> Trade:
         """
         Open a new trade.
@@ -244,6 +261,7 @@ class TradeMonitor:
             take_profit: Take profit price
             trailing_stop_pct: Trailing stop percentage
             strategy_name: Name of the strategy
+            symbol: Trading symbol (defaults to monitor's default symbol)
             notes: Additional notes
 
         Returns:
@@ -251,7 +269,7 @@ class TradeMonitor:
         """
         trade = Trade(
             trade_id=self.generate_trade_id(),
-            symbol=self.symbol,
+            symbol=symbol or self.symbol,
             direction=direction,
             status=TradeStatus.OPEN,
             entry_date=entry_date or datetime.now(),
@@ -335,28 +353,39 @@ class TradeMonitor:
             closed.append(self.close_trade(trade, exit_price, exit_date, exit_reason))
         return closed
 
-    def update_price(self, price: float, timestamp: Optional[datetime] = None):
+    def update_price(self, price: float, symbol: Optional[str] = None, timestamp: Optional[datetime] = None):
         """
-        Update current price and recalculate unrealized PnL.
+        Update current price for a symbol and recalculate unrealized PnL.
 
         Args:
             price: Current market price
+            symbol: Symbol to update (if None, updates trades matching default symbol)
             timestamp: Price timestamp
         """
         timestamp = timestamp or datetime.now()
-        self.current_price = price
-        self.price_history.append((timestamp, price))
+        symbol = symbol or self.symbol
 
-        # Update unrealized PnL for all open trades
+        # Store price per symbol
+        self.current_prices[symbol] = price
+
+        # Store price history per symbol
+        if symbol not in self.price_history:
+            self.price_history[symbol] = []
+        self.price_history[symbol].append((timestamp, price))
+
+        # Update unrealized PnL for trades matching this symbol
         total_unrealized = 0.0
         for trade in self.open_trades:
-            trade.calculate_unrealized_pnl(price)
-            total_unrealized += trade.unrealized_pnl
+            if trade.symbol == symbol:
+                trade.current_price = price
+                trade.calculate_unrealized_pnl(price)
 
-            # Update trailing stop tracking
-            if trade.trailing_stop_pct and trade.direction == TradeDirection.LONG:
-                if price > (trade.highest_price_since_entry or 0):
-                    trade.highest_price_since_entry = price
+                # Update trailing stop tracking
+                if trade.trailing_stop_pct and trade.direction == TradeDirection.LONG:
+                    if price > (trade.highest_price_since_entry or 0):
+                        trade.highest_price_since_entry = price
+
+            total_unrealized += trade.unrealized_pnl
 
         # Record equity point
         positions_value = sum(t.entry_price * t.entry_quantity for t in self.open_trades)
@@ -375,6 +404,94 @@ class TradeMonitor:
         # Trigger callbacks
         for callback in self._on_equity_update:
             callback(equity_point)
+
+    def update_prices(self, prices: Dict[str, float], timestamp: Optional[datetime] = None):
+        """
+        Update prices for multiple symbols at once.
+
+        Args:
+            prices: Dictionary of {symbol: price}
+            timestamp: Price timestamp
+        """
+        timestamp = timestamp or datetime.now()
+
+        for symbol, price in prices.items():
+            self.current_prices[symbol] = price
+            if symbol not in self.price_history:
+                self.price_history[symbol] = []
+            self.price_history[symbol].append((timestamp, price))
+
+        # Update all open trades with their respective prices
+        total_unrealized = 0.0
+        for trade in self.open_trades:
+            if trade.symbol in prices:
+                price = prices[trade.symbol]
+                trade.current_price = price
+                trade.calculate_unrealized_pnl(price)
+
+                # Update trailing stop tracking
+                if trade.trailing_stop_pct and trade.direction == TradeDirection.LONG:
+                    if price > (trade.highest_price_since_entry or 0):
+                        trade.highest_price_since_entry = price
+
+            total_unrealized += trade.unrealized_pnl
+
+        # Record equity point
+        positions_value = sum(t.entry_price * t.entry_quantity for t in self.open_trades)
+        realized_pnl = sum(t.realized_pnl for t in self.closed_trades)
+
+        equity_point = EquityPoint(
+            timestamp=timestamp,
+            equity=self.current_capital + total_unrealized,
+            cash=self.current_capital,
+            positions_value=positions_value,
+            unrealized_pnl=total_unrealized,
+            realized_pnl=realized_pnl
+        )
+        self.equity_curve.append(equity_point)
+
+        for callback in self._on_equity_update:
+            callback(equity_point)
+
+    def get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current price for a symbol."""
+        return self.current_prices.get(symbol)
+
+    def get_daily_pnl(self) -> float:
+        """Get today's PnL (realized + unrealized change since market open)."""
+        current_equity = self.get_total_equity()
+        return current_equity - self.today_start_equity
+
+    def get_total_equity(self) -> float:
+        """Get total equity (cash + unrealized PnL)."""
+        total_unrealized = sum(t.unrealized_pnl for t in self.open_trades)
+        return self.current_capital + total_unrealized
+
+    def get_unrealized_pnl(self) -> float:
+        """Get total unrealized PnL across all positions."""
+        return sum(t.unrealized_pnl for t in self.open_trades)
+
+    def get_realized_pnl(self) -> float:
+        """Get total realized PnL."""
+        return sum(t.realized_pnl for t in self.closed_trades)
+
+    def start_new_day(self):
+        """Mark start of a new trading day for daily PnL tracking."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        current_equity = self.get_total_equity()
+
+        # Store yesterday's final PnL
+        if self.equity_curve:
+            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            self.daily_pnl[yesterday] = current_equity - self.previous_day_equity
+
+        # Reset for new day
+        self.previous_day_equity = self.today_start_equity
+        self.today_start_equity = current_equity
+
+    def get_daily_pnl_history(self) -> Dict[str, float]:
+        """Get dictionary of daily PnL values."""
+        return self.daily_pnl.copy()
 
     def check_stop_loss(self, price: float, timestamp: Optional[datetime] = None) -> List[Trade]:
         """Check and execute stop losses."""
@@ -600,13 +717,16 @@ class TradeMonitor:
 
         data = []
         for trade in self.open_trades:
-            unrealized_pnl_pct = trade.calculate_unrealized_pnl_pct(self.current_price)
+            current_price = trade.current_price or self.current_prices.get(trade.symbol, 0)
+            unrealized_pnl_pct = trade.calculate_unrealized_pnl_pct()
+            current_price_str = f"${current_price:.2f}" if current_price > 0 else "-"
             data.append({
                 'Trade ID': trade.trade_id,
+                'Symbol': trade.symbol,
                 'Direction': trade.direction.value,
                 'Entry Date': trade.entry_date.strftime('%Y-%m-%d %H:%M'),
                 'Entry Price': f"${trade.entry_price:.2f}",
-                'Current Price': f"${self.current_price:.2f}",
+                'Current Price': current_price_str,
                 'Quantity': trade.entry_quantity,
                 'Unrealized PnL': f"${trade.unrealized_pnl:,.2f}",
                 'Unrealized PnL %': f"{unrealized_pnl_pct:.2f}%",

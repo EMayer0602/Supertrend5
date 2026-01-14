@@ -306,6 +306,9 @@ class TWSConnector:
             monitor.initial_capital = account.net_liquidation
             monitor.current_capital = account.total_cash
 
+        # Collect all prices for batch update
+        prices_to_update = {}
+
         # Update positions
         for pos in positions:
             if pos.position != 0:
@@ -325,17 +328,23 @@ class TWSConnector:
                         entry_price=pos.avg_cost,
                         entry_quantity=abs(int(pos.position)),
                         unrealized_pnl=pos.unrealized_pnl,
-                        realized_pnl=pos.realized_pnl
+                        realized_pnl=pos.realized_pnl,
+                        current_price=pos.market_price  # Set current price per trade
                     )
                     monitor.open_trades.append(trade)
                     monitor.all_trades.append(trade)
                 else:
-                    # Update existing
+                    # Update existing trade
                     trade = existing[0]
                     trade.unrealized_pnl = pos.unrealized_pnl
+                    trade.current_price = pos.market_price
 
-                monitor.current_price = pos.market_price
-                monitor.update_price(pos.market_price)
+                # Collect price for this symbol
+                prices_to_update[pos.symbol] = pos.market_price
+
+        # Update all prices at once
+        if prices_to_update:
+            monitor.update_prices(prices_to_update)
 
         return monitor
 

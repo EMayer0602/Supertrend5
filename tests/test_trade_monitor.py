@@ -209,9 +209,10 @@ class TestTradeMonitor:
             quantity=10
         )
 
-        monitor.update_price(110.0)
+        monitor.update_price(110.0, symbol=trade.symbol)
 
-        assert monitor.current_price == 110.0
+        assert monitor.current_prices.get(trade.symbol) == 110.0
+        assert trade.current_price == 110.0
         assert trade.unrealized_pnl == 100.0
         assert len(monitor.equity_curve) == 1
 
@@ -372,7 +373,7 @@ class TestTradeMonitorDataFrames:
             entry_price=100.0,
             quantity=10
         )
-        monitor.update_price(105.0)
+        monitor.update_price(105.0, symbol="TEST")
 
         # Closed trade
         trade = monitor.open_trade(
@@ -393,6 +394,7 @@ class TestTradeMonitorDataFrames:
         assert len(df) == 1
         assert 'Trade ID' in df.columns
         assert 'Unrealized PnL' in df.columns
+        assert 'Symbol' in df.columns  # New column
 
     def test_closed_trades_summary(self, monitor_with_data):
         """Test closed trades summary DataFrame."""
