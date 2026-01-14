@@ -69,6 +69,7 @@ class Trade:
     # PnL tracking
     realized_pnl: float = 0.0
     unrealized_pnl: float = 0.0
+    daily_pnl: float = 0.0  # Today's PnL for this position
     commission: float = 0.0
 
     # Risk management

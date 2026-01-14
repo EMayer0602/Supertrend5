@@ -361,15 +361,15 @@ class TradeDashboard:
     def _generate_summary_cards(self, stats: Dict) -> str:
         """Generate summary cards HTML."""
         # Get values - prefer TWS values if available
-        total_equity = self.monitor.initial_capital  # Net Liquidation from TWS
-        daily_pnl = self.monitor.get_daily_pnl()  # Realized + Unrealized from TWS
         unrealized = self.monitor.tws_unrealized_pnl if self.monitor.tws_unrealized_pnl is not None else self.monitor.get_unrealized_pnl()
         realized = self.monitor.tws_realized_pnl if self.monitor.tws_realized_pnl is not None else self.monitor.get_realized_pnl()
+        daily_pnl = self.monitor.get_daily_pnl()  # Realized + Unrealized from TWS
+
+        # Gesamt Kapital = Initial Capital + Unrealized + Realized
+        gesamt_kapital = self.monitor.initial_capital + unrealized + realized
 
         # Other stats
         open_trades = len(self.monitor.open_trades)
-        win_rate = stats.get('Win Rate', '0%')
-        total_trades = stats.get('Total Trades', 0)
 
         # CSS classes
         daily_pnl_class = 'positive' if daily_pnl >= 0 else 'negative'
@@ -379,8 +379,8 @@ class TradeDashboard:
         return f"""
         <div class="summary-cards">
             <div class="summary-card">
-                <div class="label">Net Liquidation</div>
-                <div class="value neutral">${total_equity:,.2f}</div>
+                <div class="label">Gesamt Kapital</div>
+                <div class="value neutral">${gesamt_kapital:,.2f}</div>
             </div>
             <div class="summary-card">
                 <div class="label">Daily PnL</div>
@@ -401,14 +401,6 @@ class TradeDashboard:
             <div class="summary-card">
                 <div class="label">Open Positions</div>
                 <div class="value neutral">{open_trades}</div>
-            </div>
-            <div class="summary-card">
-                <div class="label">Win Rate</div>
-                <div class="value neutral">{win_rate}</div>
-            </div>
-            <div class="summary-card">
-                <div class="label">Total Trades</div>
-                <div class="value neutral">{total_trades}</div>
             </div>
         </div>
         """
@@ -459,24 +451,24 @@ class TradeDashboard:
         for trade in self.monitor.open_trades:
             direction_badge = 'badge-long' if trade.direction == TradeDirection.LONG else 'badge-short'
             pnl_class = 'pnl-positive' if trade.unrealized_pnl >= 0 else 'pnl-negative'
+            daily_class = 'pnl-positive' if trade.daily_pnl >= 0 else 'pnl-negative'
 
             # Get current price for this specific symbol
             current_price = trade.current_price or self.monitor.current_prices.get(trade.symbol, 0)
             pnl_pct = trade.calculate_unrealized_pnl_pct(current_price) if current_price > 0 else 0
             current_price_str = f"${current_price:,.2f}" if current_price > 0 else "-"
+            daily_pnl_str = f"${trade.daily_pnl:+,.0f}" if trade.daily_pnl else "-"
 
             rows += f"""
             <tr>
-                <td>{trade.trade_id}</td>
                 <td>{trade.symbol}</td>
                 <td><span class="badge {direction_badge}">{trade.direction.value}</span></td>
-                <td>{trade.entry_date.strftime('%Y-%m-%d %H:%M')}</td>
+                <td>{trade.entry_quantity}</td>
                 <td>${trade.entry_price:,.2f}</td>
                 <td>{current_price_str}</td>
-                <td>{trade.entry_quantity}</td>
+                <td class="{daily_class}">{daily_pnl_str}</td>
                 <td class="{pnl_class}">${trade.unrealized_pnl:,.2f}</td>
                 <td class="{pnl_class}">{pnl_pct:+.2f}%</td>
-                <td>{trade.stop_loss if trade.stop_loss else '-'}</td>
             </tr>
             """
 
@@ -486,16 +478,14 @@ class TradeDashboard:
             <table>
                 <thead>
                     <tr>
-                        <th>Trade ID</th>
                         <th>Symbol</th>
                         <th>Direction</th>
-                        <th>Entry Date</th>
-                        <th>Entry Price</th>
-                        <th>Current Price</th>
                         <th>Qty</th>
+                        <th>Avg Cost</th>
+                        <th>Market Price</th>
+                        <th>Daily PnL</th>
                         <th>Unrealized PnL</th>
                         <th>PnL %</th>
-                        <th>Stop Loss</th>
                     </tr>
                 </thead>
                 <tbody>

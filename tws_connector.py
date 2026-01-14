@@ -48,6 +48,8 @@ class TWPositionInfo:
     unrealized_pnl: float
     realized_pnl: float
     account: str
+    daily_pnl: float = 0.0  # Today's PnL for this position
+    con_id: int = 0  # Contract ID for PnL request
 
 
 @dataclass
@@ -171,7 +173,32 @@ class TWSConnector:
         # Get portfolio items (includes market values)
         portfolio = self.ib.portfolio()
 
+        # Request PnL for account to get daily PnL per position
+        account_id = ""
+        daily_pnl_by_conid = {}
+
+        if portfolio:
+            account_id = portfolio[0].account
+            # Request account PnL - this enables daily PnL updates
+            try:
+                self.ib.reqPnL(account_id)
+                self.ib.sleep(0.5)  # Wait for PnL data
+
+                # Request PnL for each position to get daily PnL
+                for item in portfolio:
+                    if item.contract.conId and item.position != 0:
+                        try:
+                            pnl_single = self.ib.reqPnLSingle(account_id, '', item.contract.conId)
+                            self.ib.sleep(0.1)  # Brief wait
+                            if pnl_single and pnl_single.dailyPnL:
+                                daily_pnl_by_conid[item.contract.conId] = pnl_single.dailyPnL
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"Note: Could not get daily PnL: {e}")
+
         for item in portfolio:
+            daily_pnl = daily_pnl_by_conid.get(item.contract.conId, 0.0)
             pos_info = TWPositionInfo(
                 symbol=item.contract.symbol,
                 sec_type=item.contract.secType,
@@ -183,7 +210,9 @@ class TWSConnector:
                 market_value=item.marketValue,
                 unrealized_pnl=item.unrealizedPNL,
                 realized_pnl=item.realizedPNL,
-                account=item.account
+                account=item.account,
+                daily_pnl=daily_pnl,
+                con_id=item.contract.conId or 0
             )
             positions.append(pos_info)
 
@@ -353,6 +382,7 @@ class TWSConnector:
                     entry_quantity=abs(int(pos.position)),
                     unrealized_pnl=pos.unrealized_pnl,
                     realized_pnl=pos.realized_pnl,
+                    daily_pnl=pos.daily_pnl,
                     current_price=pos.market_price
                 )
                 monitor.open_trades.append(trade)
@@ -364,9 +394,10 @@ class TWSConnector:
                 total_unrealized += pos.unrealized_pnl
 
                 # Print position info
+                daily_str = f"${pos.daily_pnl:+,.0f}" if pos.daily_pnl else "-"
                 pnl_str = f"${pos.unrealized_pnl:+,.2f}" if pos.unrealized_pnl else "$0.00"
-                print(f"  {pos.symbol:<8} {pos.position:>8.0f} @ ${avg_cost_per_share:>10.2f}  "
-                      f"Mkt: ${pos.market_price:>10.2f}  Value: ${pos.market_value:>12.2f}  PnL: {pnl_str}")
+                print(f"  {pos.symbol:<8} {pos.position:>8.0f} @ ${avg_cost_per_share:>8.2f}  "
+                      f"Mkt: ${pos.market_price:>8.2f}  Daily: {daily_str:>8}  PnL: {pnl_str}")
 
         print("-" * 80)
         print(f"  Total Position Value: ${total_position_value:,.2f}")
