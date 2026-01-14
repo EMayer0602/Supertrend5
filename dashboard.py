@@ -1,0 +1,852 @@
+"""
+Trade Monitor HTML Dashboard
+
+Creates a comprehensive HTML dashboard showing:
+- Account summary and capital
+- Open positions with real-time PnL
+- Closed trades history
+- Trading statistics
+- Equity curve chart
+- Performance metrics
+
+Can connect to TWS for live data or use backtest results.
+
+Usage:
+    python dashboard.py              # Demo mode
+    python dashboard.py --tws        # Connect to TWS
+    python dashboard.py --port 4001  # Use IB Gateway port
+"""
+
+import os
+import json
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict
+import webbrowser
+import argparse
+
+import pandas as pd
+import numpy as np
+
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+
+from trade_monitor import (
+    TradeMonitor, Trade, TradeDirection, TradeStatus,
+    EquityPoint, create_monitor_from_backtest
+)
+
+
+class TradeDashboard:
+    """
+    HTML Dashboard for Trade Monitor.
+
+    Features:
+    - Real-time position tracking
+    - PnL visualization
+    - Trading statistics
+    - Equity curve
+    - Auto-refresh capability
+    """
+
+    def __init__(self, monitor: TradeMonitor, title: str = "Trade Monitor Dashboard"):
+        """
+        Initialize dashboard.
+
+        Args:
+            monitor: TradeMonitor instance
+            title: Dashboard title
+        """
+        self.monitor = monitor
+        self.title = title
+        self.last_update = datetime.now()
+
+    def generate_html(self, auto_refresh: int = 0) -> str:
+        """
+        Generate complete HTML dashboard.
+
+        Args:
+            auto_refresh: Auto-refresh interval in seconds (0 = disabled)
+
+        Returns:
+            HTML string
+        """
+        stats = self.monitor.get_statistics()
+
+        # Build HTML sections
+        html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{self.title}</title>
+    {"<meta http-equiv='refresh' content='" + str(auto_refresh) + "'>" if auto_refresh > 0 else ""}
+    <style>
+        {self._get_css()}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>{self.title}</h1>
+            <div class="update-time">Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+        </header>
+
+        {self._generate_summary_cards(stats)}
+
+        <div class="row">
+            <div class="col-8">
+                {self._generate_equity_chart()}
+            </div>
+            <div class="col-4">
+                {self._generate_statistics_panel(stats)}
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                {self._generate_open_positions_table()}
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                {self._generate_closed_trades_table()}
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-6">
+                {self._generate_pnl_chart()}
+            </div>
+            <div class="col-6">
+                {self._generate_win_loss_chart(stats)}
+            </div>
+        </div>
+
+        <footer>
+            <p>Trade Monitor Dashboard | Symbol: {self.monitor.symbol} | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </footer>
+    </div>
+
+    <script>
+        {self._get_javascript()}
+    </script>
+</body>
+</html>
+"""
+        return html
+
+    def _get_css(self) -> str:
+        """Get CSS styles."""
+        return """
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #0f3460;
+        }
+
+        header h1 {
+            color: #00d9ff;
+            font-size: 2em;
+            text-shadow: 0 0 10px rgba(0, 217, 255, 0.3);
+        }
+
+        .update-time {
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        .row {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .col-4 { flex: 0 0 33.333%; }
+        .col-6 { flex: 0 0 calc(50% - 10px); }
+        .col-8 { flex: 0 0 66.666%; }
+        .col-12 { flex: 0 0 100%; }
+
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .card h2 {
+            color: #00d9ff;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            border-bottom: 1px solid rgba(0, 217, 255, 0.3);
+            padding-bottom: 10px;
+        }
+
+        .summary-cards {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .summary-card {
+            flex: 1;
+            background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .summary-card .label {
+            font-size: 0.85em;
+            color: #888;
+            margin-bottom: 5px;
+        }
+
+        .summary-card .value {
+            font-size: 1.8em;
+            font-weight: bold;
+        }
+
+        .summary-card .value.positive { color: #00e676; }
+        .summary-card .value.negative { color: #ff5252; }
+        .summary-card .value.neutral { color: #00d9ff; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        th {
+            background: rgba(0, 217, 255, 0.1);
+            color: #00d9ff;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.8em;
+            letter-spacing: 1px;
+        }
+
+        tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .pnl-positive { color: #00e676; }
+        .pnl-negative { color: #ff5252; }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .stat-row:last-child {
+            border-bottom: none;
+        }
+
+        .stat-label {
+            color: #888;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #e0e0e0;
+        }
+
+        .chart-container {
+            height: 400px;
+            margin-top: 15px;
+        }
+
+        .badge {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75em;
+            font-weight: 600;
+        }
+
+        .badge-long {
+            background: rgba(0, 230, 118, 0.2);
+            color: #00e676;
+        }
+
+        .badge-short {
+            background: rgba(255, 82, 82, 0.2);
+            color: #ff5252;
+        }
+
+        .badge-open {
+            background: rgba(0, 217, 255, 0.2);
+            color: #00d9ff;
+        }
+
+        .badge-closed {
+            background: rgba(136, 136, 136, 0.2);
+            color: #888;
+        }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 0.85em;
+            margin-top: 30px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        @media (max-width: 1200px) {
+            .row { flex-wrap: wrap; }
+            .col-4, .col-6, .col-8 { flex: 0 0 100%; }
+        }
+        """
+
+    def _get_javascript(self) -> str:
+        """Get JavaScript for interactivity."""
+        return """
+        // Auto-scroll to see latest trades
+        document.addEventListener('DOMContentLoaded', function() {
+            // Highlight positive/negative values
+            document.querySelectorAll('td').forEach(function(td) {
+                const text = td.textContent;
+                if (text.includes('$')) {
+                    const value = parseFloat(text.replace(/[$,]/g, ''));
+                    if (value > 0 && !td.classList.contains('pnl-positive')) {
+                        if (text.includes('+') || td.cellIndex > 5) {
+                            td.classList.add('pnl-positive');
+                        }
+                    } else if (value < 0) {
+                        td.classList.add('pnl-negative');
+                    }
+                }
+            });
+        });
+        """
+
+    def _generate_summary_cards(self, stats: Dict) -> str:
+        """Generate summary cards HTML."""
+        # Parse values
+        net_profit = self._parse_currency(stats.get('Net Profit', '$0'))
+        total_return = stats.get('Total Return', '0%')
+        win_rate = stats.get('Win Rate', '0%')
+        total_trades = stats.get('Total Trades', 0)
+        open_trades = stats.get('Open Trades', len(self.monitor.open_trades))
+        unrealized = self._parse_currency(stats.get('Unrealized PnL', '$0'))
+
+        profit_class = 'positive' if net_profit >= 0 else 'negative'
+        unrealized_class = 'positive' if unrealized >= 0 else 'negative'
+
+        return f"""
+        <div class="summary-cards">
+            <div class="summary-card">
+                <div class="label">Net Profit</div>
+                <div class="value {profit_class}">${net_profit:,.2f}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Total Return</div>
+                <div class="value {'positive' if not total_return.startswith('-') else 'negative'}">{total_return}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Win Rate</div>
+                <div class="value neutral">{win_rate}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Total Trades</div>
+                <div class="value neutral">{total_trades}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Open Positions</div>
+                <div class="value neutral">{open_trades}</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">Unrealized PnL</div>
+                <div class="value {unrealized_class}">${unrealized:,.2f}</div>
+            </div>
+        </div>
+        """
+
+    def _generate_statistics_panel(self, stats: Dict) -> str:
+        """Generate statistics panel HTML."""
+        stat_rows = ""
+        display_stats = [
+            ('Initial Capital', stats.get('Initial Capital', '-')),
+            ('Current Capital', stats.get('Current Capital', '-')),
+            ('Profit Factor', stats.get('Profit Factor', '-')),
+            ('Sharpe Ratio', stats.get('Sharpe Ratio', '-')),
+            ('Sortino Ratio', stats.get('Sortino Ratio', '-')),
+            ('Max Drawdown', stats.get('Max Drawdown', '-')),
+            ('Avg Trade', stats.get('Avg Trade', '-')),
+            ('Avg Duration', stats.get('Avg Duration', '-')),
+            ('Expectancy', stats.get('Expectancy', '-')),
+            ('Max Consec. Wins', stats.get('Max Consecutive Wins', '-')),
+            ('Max Consec. Losses', stats.get('Max Consecutive Losses', '-')),
+        ]
+
+        for label, value in display_stats:
+            stat_rows += f"""
+            <div class="stat-row">
+                <span class="stat-label">{label}</span>
+                <span class="stat-value">{value}</span>
+            </div>
+            """
+
+        return f"""
+        <div class="card">
+            <h2>Performance Metrics</h2>
+            {stat_rows}
+        </div>
+        """
+
+    def _generate_open_positions_table(self) -> str:
+        """Generate open positions table HTML."""
+        if not self.monitor.open_trades:
+            return """
+            <div class="card">
+                <h2>Open Positions</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No open positions</p>
+            </div>
+            """
+
+        rows = ""
+        for trade in self.monitor.open_trades:
+            direction_badge = 'badge-long' if trade.direction == TradeDirection.LONG else 'badge-short'
+            pnl_class = 'pnl-positive' if trade.unrealized_pnl >= 0 else 'pnl-negative'
+            pnl_pct = trade.calculate_unrealized_pnl_pct(self.monitor.current_price) if self.monitor.current_price > 0 else 0
+
+            rows += f"""
+            <tr>
+                <td>{trade.trade_id}</td>
+                <td>{trade.symbol}</td>
+                <td><span class="badge {direction_badge}">{trade.direction.value}</span></td>
+                <td>{trade.entry_date.strftime('%Y-%m-%d %H:%M')}</td>
+                <td>${trade.entry_price:,.2f}</td>
+                <td>${self.monitor.current_price:,.2f}</td>
+                <td>{trade.entry_quantity}</td>
+                <td class="{pnl_class}">${trade.unrealized_pnl:,.2f}</td>
+                <td class="{pnl_class}">{pnl_pct:+.2f}%</td>
+                <td>{trade.stop_loss if trade.stop_loss else '-'}</td>
+            </tr>
+            """
+
+        return f"""
+        <div class="card">
+            <h2>Open Positions ({len(self.monitor.open_trades)})</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Trade ID</th>
+                        <th>Symbol</th>
+                        <th>Direction</th>
+                        <th>Entry Date</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>Qty</th>
+                        <th>Unrealized PnL</th>
+                        <th>PnL %</th>
+                        <th>Stop Loss</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+        """
+
+    def _generate_closed_trades_table(self, limit: int = 20) -> str:
+        """Generate closed trades table HTML."""
+        trades = self.monitor.closed_trades[-limit:][::-1]  # Most recent first
+
+        if not trades:
+            return """
+            <div class="card">
+                <h2>Closed Trades</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No closed trades</p>
+            </div>
+            """
+
+        rows = ""
+        for trade in trades:
+            direction_badge = 'badge-long' if trade.direction == TradeDirection.LONG else 'badge-short'
+            pnl_class = 'pnl-positive' if trade.realized_pnl >= 0 else 'pnl-negative'
+            pnl_pct = (trade.realized_pnl / (trade.entry_price * trade.entry_quantity)) * 100 if trade.entry_price > 0 else 0
+            duration = trade.duration()
+            duration_str = f"{duration.days}d {duration.seconds//3600}h" if duration else "-"
+
+            rows += f"""
+            <tr>
+                <td>{trade.trade_id}</td>
+                <td>{trade.symbol}</td>
+                <td><span class="badge {direction_badge}">{trade.direction.value}</span></td>
+                <td>{trade.entry_date.strftime('%Y-%m-%d %H:%M')}</td>
+                <td>${trade.entry_price:,.2f}</td>
+                <td>{trade.exit_date.strftime('%Y-%m-%d %H:%M') if trade.exit_date else '-'}</td>
+                <td>${trade.exit_price:,.2f if trade.exit_price else 0}</td>
+                <td class="{pnl_class}">${trade.realized_pnl:,.2f}</td>
+                <td class="{pnl_class}">{pnl_pct:+.2f}%</td>
+                <td>{trade.exit_reason or '-'}</td>
+                <td>{duration_str}</td>
+            </tr>
+            """
+
+        return f"""
+        <div class="card">
+            <h2>Closed Trades (Last {len(trades)})</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Trade ID</th>
+                        <th>Symbol</th>
+                        <th>Direction</th>
+                        <th>Entry Date</th>
+                        <th>Entry Price</th>
+                        <th>Exit Date</th>
+                        <th>Exit Price</th>
+                        <th>Realized PnL</th>
+                        <th>PnL %</th>
+                        <th>Exit Reason</th>
+                        <th>Duration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+        """
+
+    def _generate_equity_chart(self) -> str:
+        """Generate equity curve chart HTML using Plotly."""
+        if not PLOTLY_AVAILABLE or not self.monitor.equity_curve:
+            return """
+            <div class="card">
+                <h2>Equity Curve</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No equity data available</p>
+            </div>
+            """
+
+        df = self.monitor.get_equity_curve_df()
+
+        fig = go.Figure()
+
+        # Equity line
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['Equity'],
+            mode='lines',
+            name='Equity',
+            line=dict(color='#00d9ff', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(0, 217, 255, 0.1)'
+        ))
+
+        # Initial capital line
+        fig.add_hline(
+            y=self.monitor.initial_capital,
+            line_dash="dash",
+            line_color="#666",
+            annotation_text=f"Initial: ${self.monitor.initial_capital:,.0f}"
+        )
+
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0'),
+            margin=dict(l=50, r=20, t=30, b=50),
+            height=350,
+            xaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.1)',
+                title=''
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.1)',
+                title='Equity ($)'
+            ),
+            showlegend=False
+        )
+
+        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
+
+        return f"""
+        <div class="card">
+            <h2>Equity Curve</h2>
+            <div class="chart-container">
+                {chart_html}
+            </div>
+        </div>
+        """
+
+    def _generate_pnl_chart(self) -> str:
+        """Generate PnL distribution chart."""
+        if not PLOTLY_AVAILABLE or not self.monitor.closed_trades:
+            return """
+            <div class="card">
+                <h2>Trade PnL Distribution</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No trade data available</p>
+            </div>
+            """
+
+        pnls = [t.realized_pnl for t in self.monitor.closed_trades]
+        colors = ['#00e676' if p >= 0 else '#ff5252' for p in pnls]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=list(range(1, len(pnls) + 1)),
+            y=pnls,
+            marker_color=colors,
+            name='PnL'
+        ))
+
+        fig.add_hline(y=0, line_color='#666')
+
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0'),
+            margin=dict(l=50, r=20, t=30, b=50),
+            height=300,
+            xaxis=dict(
+                showgrid=False,
+                title='Trade #'
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(255,255,255,0.1)',
+                title='PnL ($)'
+            ),
+            showlegend=False
+        )
+
+        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
+
+        return f"""
+        <div class="card">
+            <h2>Trade PnL Distribution</h2>
+            <div class="chart-container" style="height: 300px;">
+                {chart_html}
+            </div>
+        </div>
+        """
+
+    def _generate_win_loss_chart(self, stats: Dict) -> str:
+        """Generate win/loss pie chart."""
+        if not PLOTLY_AVAILABLE:
+            return ""
+
+        wins = stats.get('Winning Trades', 0)
+        losses = stats.get('Losing Trades', 0)
+
+        if wins == 0 and losses == 0:
+            return """
+            <div class="card">
+                <h2>Win/Loss Ratio</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No trade data available</p>
+            </div>
+            """
+
+        fig = go.Figure()
+        fig.add_trace(go.Pie(
+            labels=['Wins', 'Losses'],
+            values=[wins, losses],
+            hole=0.6,
+            marker=dict(colors=['#00e676', '#ff5252']),
+            textinfo='label+percent',
+            textfont=dict(color='#e0e0e0')
+        ))
+
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e0e0e0'),
+            margin=dict(l=20, r=20, t=30, b=30),
+            height=300,
+            showlegend=False,
+            annotations=[dict(
+                text=f'{wins}/{wins+losses}',
+                x=0.5, y=0.5,
+                font_size=20,
+                showarrow=False,
+                font=dict(color='#00d9ff')
+            )]
+        )
+
+        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
+
+        return f"""
+        <div class="card">
+            <h2>Win/Loss Ratio</h2>
+            <div class="chart-container" style="height: 300px;">
+                {chart_html}
+            </div>
+        </div>
+        """
+
+    def _parse_currency(self, value: str) -> float:
+        """Parse currency string to float."""
+        try:
+            return float(value.replace('$', '').replace(',', '').strip())
+        except:
+            return 0.0
+
+    def save(self, filepath: str = "dashboard.html", auto_refresh: int = 0):
+        """
+        Save dashboard to HTML file.
+
+        Args:
+            filepath: Output file path
+            auto_refresh: Auto-refresh interval in seconds
+        """
+        html = self.generate_html(auto_refresh=auto_refresh)
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(html)
+
+        print(f"Dashboard saved to: {filepath}")
+        return filepath
+
+    def open_in_browser(self, filepath: str = "dashboard.html", auto_refresh: int = 0):
+        """Save and open dashboard in browser."""
+        self.save(filepath, auto_refresh)
+        webbrowser.open(f'file://{os.path.abspath(filepath)}')
+
+
+def create_demo_monitor() -> TradeMonitor:
+    """Create a demo monitor with sample trades."""
+    monitor = TradeMonitor(initial_capital=10000.0, symbol="DEMO")
+
+    # Add some demo trades
+    trades_data = [
+        (100.0, 112.0, "signal", TradeDirection.LONG, 5),
+        (108.0, 102.0, "stop_loss", TradeDirection.LONG, 3),
+        (105.0, 118.0, "take_profit", TradeDirection.LONG, 8),
+        (115.0, 108.0, "signal", TradeDirection.SHORT, 4),
+        (110.0, 125.0, "trailing_stop", TradeDirection.LONG, 6),
+        (120.0, 115.0, "signal", TradeDirection.LONG, 2),
+        (118.0, 130.0, "signal", TradeDirection.LONG, 5),
+        (125.0, 122.0, "stop_loss", TradeDirection.LONG, 3),
+    ]
+
+    base_date = datetime.now() - timedelta(days=60)
+
+    for i, (entry, exit_p, reason, direction, days) in enumerate(trades_data):
+        entry_date = base_date + timedelta(days=i*7)
+        exit_date = entry_date + timedelta(days=days)
+
+        trade = monitor.open_trade(
+            direction=direction,
+            entry_price=entry,
+            entry_date=entry_date,
+            quantity=50
+        )
+
+        # Update price to simulate movement
+        for d in range(days):
+            price = entry + (exit_p - entry) * (d / days)
+            monitor.update_price(price, entry_date + timedelta(days=d))
+
+        monitor.close_trade(trade, exit_p, exit_date, reason)
+
+    # Add open position
+    open_trade = monitor.open_trade(
+        direction=TradeDirection.LONG,
+        entry_price=128.0,
+        quantity=40,
+        stop_loss=120.0,
+        trailing_stop_pct=0.05
+    )
+    monitor.update_price(135.0)
+
+    return monitor
+
+
+def main():
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description='Trade Monitor Dashboard')
+    parser.add_argument('--tws', action='store_true', help='Connect to TWS')
+    parser.add_argument('--host', default='127.0.0.1', help='TWS host')
+    parser.add_argument('--port', type=int, default=7497, help='TWS port (7497=TWS, 4001=Gateway)')
+    parser.add_argument('--refresh', type=int, default=30, help='Auto-refresh interval (0=disabled)')
+    parser.add_argument('--output', default='dashboard.html', help='Output file')
+    args = parser.parse_args()
+
+    if args.tws:
+        # Try to connect to TWS
+        try:
+            from tws_connector import TWSConnector, print_tws_status
+
+            print(f"Connecting to TWS at {args.host}:{args.port}...")
+            connector = TWSConnector(host=args.host, port=args.port)
+
+            if connector.connect():
+                print_tws_status(connector)
+
+                # Create monitor from TWS
+                monitor = TradeMonitor(initial_capital=10000.0, symbol="TWS Portfolio")
+                connector.sync_to_monitor(monitor)
+
+                # Create dashboard
+                dashboard = TradeDashboard(monitor, title="TWS Trade Monitor")
+                dashboard.open_in_browser(args.output, auto_refresh=args.refresh)
+
+                input("Press Enter to disconnect...")
+                connector.disconnect()
+            else:
+                print("Could not connect to TWS. Using demo data...")
+                monitor = create_demo_monitor()
+                dashboard = TradeDashboard(monitor, title="Trade Monitor (Demo)")
+                dashboard.open_in_browser(args.output, auto_refresh=0)
+
+        except ImportError:
+            print("ib_insync not installed. Using demo data...")
+            print("Install with: pip install ib_insync")
+            monitor = create_demo_monitor()
+            dashboard = TradeDashboard(monitor, title="Trade Monitor (Demo)")
+            dashboard.open_in_browser(args.output, auto_refresh=0)
+    else:
+        # Demo mode
+        print("Creating demo dashboard...")
+        monitor = create_demo_monitor()
+        dashboard = TradeDashboard(monitor, title="Trade Monitor Dashboard")
+        dashboard.open_in_browser(args.output, auto_refresh=0)
+        print("\nRun with --tws flag to connect to TWS")
+
+
+if __name__ == "__main__":
+    main()
