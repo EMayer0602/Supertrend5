@@ -27,6 +27,13 @@ import argparse
 import pandas as pd
 import numpy as np
 
+# PnL history for capital curve
+try:
+    from pnl_history import PnLHistory
+    PNL_HISTORY_AVAILABLE = True
+except ImportError:
+    PNL_HISTORY_AVAILABLE = False
+
 try:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -97,6 +104,12 @@ class TradeDashboard:
         </header>
 
         {self._generate_summary_cards(stats)}
+
+        <div class="row">
+            <div class="col-12">
+                {self._generate_capital_curve()}
+            </div>
+        </div>
 
         <div class="row">
             <div class="col-8">
@@ -642,6 +655,90 @@ class TradeDashboard:
         </div>
         """
 
+    def _generate_capital_curve(self, hours: int = 8) -> str:
+        """Generate capital curve (Daily PnL over time) from history."""
+        if not PLOTLY_AVAILABLE or not PNL_HISTORY_AVAILABLE:
+            return """
+            <div class="card">
+                <h2>Daily PnL Curve</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No history data available</p>
+            </div>
+            """
+
+        try:
+            history = PnLHistory()
+            data = history.get_daily_pnl_curve(hours=hours)
+
+            if len(data) < 2:
+                return """
+                <div class="card">
+                    <h2>Daily PnL Curve</h2>
+                    <p style="color: #888; text-align: center; padding: 20px;">
+                        Recording data... Curve will appear after a few updates.
+                    </p>
+                </div>
+                """
+
+            timestamps = [d[0] for d in data]
+            values = [d[1] for d in data]
+
+            # Determine color based on current value
+            current_pnl = values[-1] if values else 0
+            line_color = '#00e676' if current_pnl >= 0 else '#ff5252'
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=timestamps,
+                y=values,
+                mode='lines',
+                name='Daily PnL',
+                line=dict(color=line_color, width=2),
+                fill='tozeroy',
+                fillcolor='rgba(0, 230, 118, 0.1)' if current_pnl >= 0 else 'rgba(255, 82, 82, 0.1)'
+            ))
+
+            # Zero line
+            fig.add_hline(y=0, line_dash="dash", line_color="#666", line_width=1)
+
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#e0e0e0'),
+                margin=dict(l=50, r=20, t=30, b=50),
+                height=300,
+                xaxis=dict(
+                    showgrid=True,
+                    gridcolor='rgba(255,255,255,0.1)',
+                    title=''
+                ),
+                yaxis=dict(
+                    showgrid=True,
+                    gridcolor='rgba(255,255,255,0.1)',
+                    title='Daily PnL ($)'
+                ),
+                showlegend=False
+            )
+
+            chart_html = fig.to_html(full_html=False, include_plotlyjs=False)
+
+            pnl_color = '#00e676' if current_pnl >= 0 else '#ff5252'
+            return f"""
+            <div class="card">
+                <h2>Daily PnL Curve <span style="color: {pnl_color}; float: right;">${current_pnl:+,.2f}</span></h2>
+                <div class="chart-container">
+                    {chart_html}
+                </div>
+            </div>
+            """
+        except Exception as e:
+            return f"""
+            <div class="card">
+                <h2>Daily PnL Curve</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">Error: {e}</p>
+            </div>
+            """
+
     def _generate_pnl_chart(self) -> str:
         """Generate PnL distribution chart."""
         if not PLOTLY_AVAILABLE or not self.monitor.closed_trades:
@@ -850,6 +947,7 @@ def main():
         # Try to connect to TWS
         try:
             from tws_connector import TWSConnector, print_tws_status
+            from pnl_history import PnLHistory, record_pnl
             import time
 
             print(f"Connecting to TWS at {args.host}:{args.port}...")
@@ -861,8 +959,14 @@ def main():
                 # Create monitor from TWS
                 monitor = TradeMonitor(initial_capital=10000.0, symbol="TWS Portfolio")
 
+                # Create PnL history tracker
+                pnl_history = PnLHistory()
+
                 # Initial sync
                 connector.sync_to_monitor(monitor)
+
+                # Record initial PnL
+                record_pnl(monitor)
 
                 # Create dashboard
                 dashboard = TradeDashboard(monitor, title="TWS Trade Monitor")
@@ -870,6 +974,7 @@ def main():
 
                 if args.refresh > 0:
                     print(f"\nLive mode: updating every {args.refresh} seconds")
+                    print("Recording PnL history for capital curve...")
                     print("Press Ctrl+C to stop...")
                     try:
                         while True:
@@ -878,6 +983,10 @@ def main():
                             monitor.open_trades.clear()
                             monitor.all_trades.clear()
                             connector.sync_to_monitor(monitor)
+
+                            # Record PnL to history
+                            record_pnl(monitor)
+
                             dashboard.save(args.output, auto_refresh=args.refresh)
                             print(f"  Updated: {len(monitor.open_trades)} positions, Daily PnL: ${monitor.tws_daily_pnl or 0:+,.2f}")
                     except KeyboardInterrupt:
