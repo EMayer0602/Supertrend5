@@ -203,25 +203,37 @@ class TWSConnector:
 
         if portfolio:
             account_id = portfolio[0].account
-            # Request account PnL - this enables daily PnL updates
+            import math
+
+            # Request account PnL first
             try:
                 self.ib.reqPnL(account_id)
-                self.ib.sleep(0.5)  # Wait for PnL data
+                self.ib.sleep(1)  # Wait for PnL subscription
 
-                # Request PnL for each position to get daily PnL
-                import math
+                # Check if we got account PnL
+                pnl_data = self.ib.pnl()
+                for pnl in pnl_data:
+                    if pnl.account == account_id:
+                        print(f"DEBUG: Account PnL - Daily: {pnl.dailyPnL}, Unrealized: {pnl.unrealizedPnL}, Realized: {pnl.realizedPnL}")
+
+                # Request PnL for each position
                 for item in portfolio:
                     if item.contract.conId and item.position != 0:
                         try:
-                            pnl_single = self.ib.reqPnLSingle(account_id, '', item.contract.conId)
-                            self.ib.sleep(0.1)  # Brief wait
-                            if pnl_single and pnl_single.dailyPnL is not None:
-                                daily_val = pnl_single.dailyPnL
-                                # Check for NaN
-                                if not math.isnan(daily_val):
-                                    daily_pnl_by_conid[item.contract.conId] = daily_val
+                            self.ib.reqPnLSingle(account_id, '', item.contract.conId)
                         except Exception:
                             pass
+
+                # Wait for all PnL data to arrive
+                self.ib.sleep(2)
+
+                # Now read the pnlSingle data
+                pnl_singles = self.ib.pnlSingle()
+                for pnl in pnl_singles:
+                    if pnl.dailyPnL is not None and not math.isnan(pnl.dailyPnL):
+                        daily_pnl_by_conid[pnl.conId] = pnl.dailyPnL
+                        print(f"DEBUG: {pnl.conId} daily PnL: {pnl.dailyPnL}")
+
             except Exception as e:
                 print(f"Note: Could not get daily PnL: {e}")
 
@@ -373,10 +385,19 @@ class TWSConnector:
             # Set capital values from TWS account
             monitor.initial_capital = account.net_liquidation
             monitor.current_capital = account.total_cash
-            monitor.today_start_equity = account.net_liquidation  # For daily PnL
+            monitor.today_start_equity = account.net_liquidation
 
-            # Store TWS daily PnL (realized + unrealized)
-            monitor.tws_daily_pnl = account.realized_pnl + account.unrealized_pnl
+            # Get daily PnL from pnl() subscription (more accurate than account values)
+            pnl_data = self.ib.pnl()
+            daily_pnl_from_tws = None
+            for pnl in pnl_data:
+                if pnl.account == account.account_id and pnl.dailyPnL is not None:
+                    import math
+                    if not math.isnan(pnl.dailyPnL):
+                        daily_pnl_from_tws = pnl.dailyPnL
+
+            # Store TWS PnL values
+            monitor.tws_daily_pnl = daily_pnl_from_tws if daily_pnl_from_tws is not None else (account.realized_pnl + account.unrealized_pnl)
             monitor.tws_unrealized_pnl = account.unrealized_pnl
             monitor.tws_realized_pnl = account.realized_pnl
 
@@ -385,7 +406,7 @@ class TWSConnector:
             print(f"  Cash: ${account.total_cash:,.2f}")
             print(f"  Unrealized PnL: ${account.unrealized_pnl:,.2f}")
             print(f"  Realized PnL: ${account.realized_pnl:,.2f}")
-            print(f"  Daily PnL (R+U): ${account.realized_pnl + account.unrealized_pnl:+,.2f}")
+            print(f"  Daily PnL: ${monitor.tws_daily_pnl:+,.2f}")
 
         # Clear existing open trades to refresh from TWS
         monitor.open_trades.clear()
