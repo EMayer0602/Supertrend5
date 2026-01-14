@@ -115,6 +115,14 @@ class PnLHistory:
 
         return [(s.timestamp, s.daily_pnl) for s in snapshots]
 
+    def get_total_pnl_curve(self, hours: int = 8) -> List[Tuple[datetime, float]]:
+        """Get total PnL (realized + unrealized) curve for capital chart."""
+        snapshots = self.get_history(hours)
+        if not snapshots:
+            return []
+
+        return [(s.timestamp, s.unrealized_pnl + s.realized_pnl) for s in snapshots]
+
     def clear_old_data(self, days: int = 30):
         """Remove data older than N days."""
         cutoff = datetime.now() - timedelta(days=days)

@@ -106,8 +106,11 @@ class TradeDashboard:
         {self._generate_summary_cards(stats)}
 
         <div class="row">
-            <div class="col-12">
+            <div class="col-6">
                 {self._generate_capital_curve()}
+            </div>
+            <div class="col-6">
+                {self._generate_daily_pnl_curve()}
             </div>
         </div>
 
@@ -656,11 +659,91 @@ class TradeDashboard:
         """
 
     def _generate_capital_curve(self, hours: int = 8) -> str:
-        """Generate capital curve (Daily PnL over time) from history."""
+        """Generate capital curve (Realized + Unrealized PnL over time)."""
         if not PLOTLY_AVAILABLE or not PNL_HISTORY_AVAILABLE:
             return """
             <div class="card">
-                <h2>Daily PnL Curve</h2>
+                <h2>Kapitalkurve (R+U PnL)</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">No history data available</p>
+            </div>
+            """
+
+        try:
+            history = PnLHistory()
+            data = history.get_total_pnl_curve(hours=hours)
+
+            if len(data) < 2:
+                return """
+                <div class="card">
+                    <h2>Kapitalkurve (R+U PnL)</h2>
+                    <p style="color: #888; text-align: center; padding: 20px;">
+                        Recording data... Curve will appear after a few updates.
+                    </p>
+                </div>
+                """
+
+            timestamps = [d[0] for d in data]
+            values = [d[1] for d in data]
+
+            current_pnl = values[-1] if values else 0
+            line_color = '#00d9ff'
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=timestamps,
+                y=values,
+                mode='lines',
+                name='Total PnL',
+                line=dict(color=line_color, width=2),
+                fill='tozeroy',
+                fillcolor='rgba(0, 217, 255, 0.1)'
+            ))
+
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='#e0e0e0'),
+                margin=dict(l=50, r=20, t=30, b=50),
+                height=300,
+                xaxis=dict(
+                    showgrid=True,
+                    gridcolor='rgba(255,255,255,0.1)',
+                    title=''
+                ),
+                yaxis=dict(
+                    showgrid=True,
+                    gridcolor='rgba(255,255,255,0.1)',
+                    title='Total PnL ($)'
+                ),
+                showlegend=False
+            )
+
+            chart_html = fig.to_html(full_html=False, include_plotlyjs=False)
+
+            pnl_color = '#00e676' if current_pnl >= 0 else '#ff5252'
+            return f"""
+            <div class="card">
+                <h2>Kapitalkurve (R+U) <span style="color: {pnl_color}; float: right;">${current_pnl:+,.2f}</span></h2>
+                <div class="chart-container">
+                    {chart_html}
+                </div>
+            </div>
+            """
+        except Exception as e:
+            return f"""
+            <div class="card">
+                <h2>Kapitalkurve (R+U PnL)</h2>
+                <p style="color: #888; text-align: center; padding: 20px;">Error: {e}</p>
+            </div>
+            """
+
+    def _generate_daily_pnl_curve(self, hours: int = 8) -> str:
+        """Generate Daily PnL curve over time."""
+        if not PLOTLY_AVAILABLE or not PNL_HISTORY_AVAILABLE:
+            return """
+            <div class="card">
+                <h2>Daily PnL</h2>
                 <p style="color: #888; text-align: center; padding: 20px;">No history data available</p>
             </div>
             """
@@ -672,9 +755,9 @@ class TradeDashboard:
             if len(data) < 2:
                 return """
                 <div class="card">
-                    <h2>Daily PnL Curve</h2>
+                    <h2>Daily PnL</h2>
                     <p style="color: #888; text-align: center; padding: 20px;">
-                        Recording data... Curve will appear after a few updates.
+                        Recording data...
                     </p>
                 </div>
                 """
@@ -682,7 +765,6 @@ class TradeDashboard:
             timestamps = [d[0] for d in data]
             values = [d[1] for d in data]
 
-            # Determine color based on current value
             current_pnl = values[-1] if values else 0
             line_color = '#00e676' if current_pnl >= 0 else '#ff5252'
 
@@ -698,7 +780,6 @@ class TradeDashboard:
                 fillcolor='rgba(0, 230, 118, 0.1)' if current_pnl >= 0 else 'rgba(255, 82, 82, 0.1)'
             ))
 
-            # Zero line
             fig.add_hline(y=0, line_dash="dash", line_color="#666", line_width=1)
 
             fig.update_layout(
@@ -725,7 +806,7 @@ class TradeDashboard:
             pnl_color = '#00e676' if current_pnl >= 0 else '#ff5252'
             return f"""
             <div class="card">
-                <h2>Daily PnL Curve <span style="color: {pnl_color}; float: right;">${current_pnl:+,.2f}</span></h2>
+                <h2>Daily PnL <span style="color: {pnl_color}; float: right;">${current_pnl:+,.2f}</span></h2>
                 <div class="chart-container">
                     {chart_html}
                 </div>
@@ -734,7 +815,7 @@ class TradeDashboard:
         except Exception as e:
             return f"""
             <div class="card">
-                <h2>Daily PnL Curve</h2>
+                <h2>Daily PnL</h2>
                 <p style="color: #888; text-align: center; padding: 20px;">Error: {e}</p>
             </div>
             """
