@@ -1,0 +1,99 @@
+{
+    "_comment": "Stock categories - Optimized by indicator backtest",
+    "_last_updated": "2026-01-07 16:40",
+    "strategies": {
+        "SUPERTREND": {
+            "description": "Stocks where Supertrend indicator performs best",
+            "settings": {
+                "st_period": 15,
+                "st_multiplier": 4.0,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": [
+                "MRK",
+                "MRNA",
+                "NFLX",
+                "NKE",
+                "PDYN",
+                "PFE",
+                "PYPL",
+                "QBTS"
+            ]
+        },
+        "KAMA": {
+            "description": "Stocks where KAMA crossover performs best",
+            "settings": {
+                "kama_fast": 10,
+                "kama_slow": 30,
+                "trailing_stop_pct": 0.15
+            },
+            "tickers": [
+                "JNJ",
+                "TGT"
+            ]
+        },
+        "JMA": {
+            "description": "Stocks where JMA crossover performs best",
+            "settings": {
+                "jma_fast": 7,
+                "jma_slow": 21,
+                "trailing_stop_pct": 0.15
+            },
+            "tickers": [
+                "UNH"
+            ]
+        },
+        "BUY_HOLD": {
+            "description": "Strong uptrends - no indicator beats B&H",
+            "settings": {
+                "trailing_stop_pct": 0.2,
+                "reentry_after_days": 5
+            },
+            "tickers": [
+                "AMD",
+                "AVGO",
+                "COIN",
+                "CRWD",
+                "DRH",
+                "INOD",
+                "JPM",
+                "META",
+                "MSTR",
+                "MU",
+                "NVDA",
+                "PLTR",
+                "QQQ",
+                "QUBT",
+                "SHOP",
+                "SPY",
+                "TSLA",
+                "UBER"
+            ]
+        },
+        "TREND_FOLLOW": {
+            "description": "ETFs - KAMA crossover",
+            "settings": {
+                "kama_fast": 10,
+                "kama_slow": 30
+            },
+            "tickers": [
+                "SPY",
+                "QQQ",
+                "JPM",
+                "JNJ"
+            ]
+        },
+        "EXCLUDED": {
+            "description": "Excluded stocks",
+            "tickers": [
+                "WBA",
+                "SQ",
+                "PG"
+            ]
+        }
+    },
+    "watchlist": {
+        "description": "Stocks to monitor",
+        "tickers": []
+    }
+}
