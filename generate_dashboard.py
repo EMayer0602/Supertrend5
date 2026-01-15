@@ -299,12 +299,19 @@ def parse_flexquery_trades(xml_text: str) -> List[Dict]:
                 if not symbol:
                     continue
 
+                # Try different attribute names for time
+                trade_time = (trade.get('tradeTime') or
+                             trade.get('tradeTimestamp') or
+                             trade.get('dateTime', '')[-8:] if trade.get('dateTime') else '' or
+                             trade.get('executionTime') or
+                             trade.get('time') or '')
+
                 # Parse trade data
                 trade_data = {
                     'symbol': symbol,
                     'trade_date': trade.get('tradeDate', ''),
-                    'trade_time': trade.get('tradeTime', ''),
-                    'datetime': f"{trade.get('tradeDate', '')} {trade.get('tradeTime', '')}",
+                    'trade_time': trade_time,
+                    'datetime': f"{trade.get('tradeDate', '')} {trade_time}",
                     'side': trade.get('buySell', ''),  # BUY or SELL
                     'quantity': abs(int(float(trade.get('quantity', 0)))),
                     'price': float(trade.get('tradePrice', 0)),
@@ -315,6 +322,10 @@ def parse_flexquery_trades(xml_text: str) -> List[Dict]:
                     'order_id': trade.get('ibOrderID', ''),
                     'exec_id': trade.get('ibExecID', '')
                 }
+
+                # Debug: print all attributes of first trade
+                if len(trades) == 0:
+                    logger.info(f"Trade attributes: {list(trade.attrib.keys())}")
 
                 trades.append(trade_data)
 
