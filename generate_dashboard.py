@@ -863,6 +863,13 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     unrealized_class = "positive" if unrealized >= 0 else "negative"
     realized_class = "positive" if realized >= 0 else "negative"
     total_return_class = "positive" if metrics['total_return'] >= 0 else "negative"
+    closed_pnl_class = "positive" if total_closed_pnl >= 0 else "negative"
+
+    # Metric classes
+    winrate_class = "positive" if metrics['win_rate'] >= 50 else "negative"
+    pf_class = "positive" if metrics['profit_factor'] >= 1 else "negative"
+    sharpe_class = "positive" if metrics['sharpe_ratio'] >= 0 else "negative"
+    expectancy_class = "positive" if metrics['expectancy'] >= 0 else "negative"
 
     refresh_meta = '<meta http-equiv="refresh" content="30">' if auto_refresh else ''
 
@@ -1102,15 +1109,15 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             </div>
             <div class="metric-row">
                 <span class="metric-label">Win Rate</span>
-                <span class="metric-value {'positive' if metrics['win_rate'] >= 50 else 'negative'}">{metrics['win_rate']}%</span>
+                <span class="metric-value {winrate_class}">{metrics['win_rate']}%</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Profit Factor</span>
-                <span class="metric-value {'positive' if metrics['profit_factor'] >= 1 else 'negative'}">{metrics['profit_factor']}</span>
+                <span class="metric-value {pf_class}">{metrics['profit_factor']}</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Sharpe Ratio</span>
-                <span class="metric-value {'positive' if metrics['sharpe_ratio'] >= 0 else 'negative'}">{metrics['sharpe_ratio']}</span>
+                <span class="metric-value {sharpe_class}">{metrics['sharpe_ratio']}</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Max Drawdown</span>
@@ -1130,7 +1137,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             </div>
             <div class="metric-row">
                 <span class="metric-label">Expectancy</span>
-                <span class="metric-value {'positive' if metrics['expectancy'] >= 0 else 'negative'}">${metrics['expectancy']:+,.2f}</span>
+                <span class="metric-value {expectancy_class}">${metrics['expectancy']:+,.2f}</span>
             </div>
         </div>
     </div>
@@ -1157,7 +1164,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     </div>
 
     <div class="positions-card">
-        <div class="positions-title">Closed Trades ({len(closed_trades)}) <span class="{'positive' if total_closed_pnl >= 0 else 'negative'}" style="float:right;">Total: ${total_closed_pnl:+,.2f}</span></div>
+        <div class="positions-title">Closed Trades ({len(closed_trades)}) <span class="{closed_pnl_class}" style="float:right;">Total: ${total_closed_pnl:+,.2f}</span></div>
         <table class="positions-table">
             <thead>
                 <tr>
