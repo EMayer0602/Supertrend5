@@ -300,19 +300,16 @@ def parse_flexquery_trades(xml_text: str) -> List[Dict]:
                     continue
 
                 # Try different attribute names for time
-                # IB dateTime format is "YYYY-MM-DD;HHmmss" (semicolon separator!)
+                # IB dateTime/orderTime format is "YYYY-MM-DD;HHmmss" (semicolon separator!)
                 trade_time = ''
-                if trade.get('orderTime'):
-                    trade_time = trade.get('orderTime')
-                elif trade.get('tradeTime'):
-                    trade_time = trade.get('tradeTime')
-                elif trade.get('dateTime'):
-                    # Split on semicolon to get time part
-                    dt = trade.get('dateTime')
-                    if ';' in dt:
-                        trade_time = dt.split(';')[1] if len(dt.split(';')) > 1 else ''
-                    elif ' ' in dt:
-                        trade_time = dt.split(' ')[1] if len(dt.split(' ')) > 1 else ''
+                raw_time = trade.get('orderTime') or trade.get('tradeTime') or trade.get('dateTime') or ''
+                if raw_time:
+                    if ';' in raw_time:
+                        trade_time = raw_time.split(';')[1] if len(raw_time.split(';')) > 1 else ''
+                    elif ' ' in raw_time:
+                        trade_time = raw_time.split(' ')[1] if len(raw_time.split(' ')) > 1 else ''
+                    elif len(raw_time) == 6 and raw_time.isdigit():
+                        trade_time = raw_time  # Already just HHmmss
 
                 # Parse trade data
                 trade_data = {
