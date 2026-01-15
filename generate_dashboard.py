@@ -836,10 +836,10 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         entry_time = trade.get('entry_time', '')
         # Handle YYYYMMDD format
         if len(entry_date) == 8 and entry_date.isdigit():
-            entry_date_fmt = f"{entry_date[4:6]}-{entry_date[6:8]}"
-        # Handle YYYY-MM-DD format
+            entry_date_fmt = f"{entry_date[:4]}-{entry_date[4:6]}-{entry_date[6:8]}"
+        # Handle YYYY-MM-DD format (keep as is)
         elif len(entry_date) == 10 and '-' in entry_date:
-            entry_date_fmt = entry_date[5:]  # MM-DD
+            entry_date_fmt = entry_date
         else:
             entry_date_fmt = entry_date
         # Add time if available (format: HHmmss or HH:mm:ss)
@@ -863,10 +863,10 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         exit_time = trade.get('exit_time', '')
         # Handle YYYYMMDD format
         if len(exit_date) == 8 and exit_date.isdigit():
-            exit_date_fmt = f"{exit_date[4:6]}-{exit_date[6:8]}"
-        # Handle YYYY-MM-DD format
+            exit_date_fmt = f"{exit_date[:4]}-{exit_date[4:6]}-{exit_date[6:8]}"
+        # Handle YYYY-MM-DD format (keep as is)
         elif len(exit_date) == 10 and '-' in exit_date:
-            exit_date_fmt = exit_date[5:]  # MM-DD
+            exit_date_fmt = exit_date
         else:
             exit_date_fmt = exit_date
         # Add time if available (format: HHmmss or HH:mm:ss)
