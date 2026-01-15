@@ -4,13 +4,9 @@ TWS Dashboard Generator - Full Featured
 ========================================
 Connects to TWS, reads positions & account data, generates HTML dashboard.
 
-Features:
-- Real-time portfolio data from TWS
-- Equity curve tracking
-- Daily P&L chart
-- Per-position P&L breakdown
-- Performance metrics (Sharpe, Sortino, Drawdown, etc.)
-- Auto-refresh capability
+KAPITALKURVE FORMEL:
+    Equity = NetLiquidation = TotalCashValue + UnrealizedPnL
+    Die Kurve wird täglich in portfolio_history.json gespeichert.
 
 Usage:
     python generate_dashboard.py                    # Generate dashboard
@@ -42,6 +38,7 @@ except ImportError:
 IB_HOST = "127.0.0.1"
 IB_PORT = 7497  # Default: Paper trading (7496 for live)
 IB_CLIENT_ID = 99
+INITIAL_CAPITAL = 50000.00  # Dein Startkapital
 
 CATEGORIES_FILE = "stock_categories.json"
 OUTPUT_FILE = "dashboard.html"
@@ -71,9 +68,17 @@ def load_history() -> Dict:
     """Load portfolio history from file"""
     try:
         with open(HISTORY_FILE, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {'equity': [], 'daily_pnl': [], 'trades': []}
+            data = json.load(f)
+            # Ensure all required keys exist
+            if 'equity' not in data:
+                data['equity'] = []
+            if 'daily_pnl' not in data:
+                data['daily_pnl'] = []
+            if 'trades' not in data:
+                data['trades'] = []
+            return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {'equity': [], 'daily_pnl': [], 'trades': [], 'initial_capital': INITIAL_CAPITAL}
 
 
 def save_history(history: Dict):
@@ -98,169 +103,55 @@ def connect_to_ib(port: int = IB_PORT) -> Optional[IB]:
         return None
 
 
-def get_executions(ib: IB, days_back: int = 7) -> List[Dict]:
-    """Get recent trade executions from TWS"""
-    from ib_insync import ExecutionFilter
-
-    executions = []
-    try:
-        # Request executions
-        exec_filter = ExecutionFilter()
-        fills = ib.reqExecutions(exec_filter)
-        ib.sleep(2)
-
-        for fill in fills:
-            exec_info = fill.execution
-            contract = fill.contract
-
-            executions.append({
-                'symbol': contract.symbol,
-                'side': exec_info.side,  # BOT or SLD
-                'quantity': int(exec_info.shares),
-                'price': exec_info.price,
-                'time': exec_info.time,
-                'exec_id': exec_info.execId,
-                'order_id': exec_info.orderId,
-                'commission': fill.commissionReport.commission if fill.commissionReport else 0,
-                'realized_pnl': fill.commissionReport.realizedPNL if fill.commissionReport else 0
-            })
-
-    except Exception as e:
-        logger.warning(f"Could not get executions: {e}")
-
-    return executions
-
-
-def get_closed_trades(executions: List[Dict]) -> List[Dict]:
-    """Calculate closed trades from executions"""
-    # Group by symbol
-    from collections import defaultdict
-    trades_by_symbol = defaultdict(list)
-
-    for ex in executions:
-        trades_by_symbol[ex['symbol']].append(ex)
-
-    closed_trades = []
-
-    for symbol, execs in trades_by_symbol.items():
-        # Sort by time
-        execs.sort(key=lambda x: x['time'])
-
-        position = 0
-        entry_price = 0
-        entry_time = None
-
-        for ex in execs:
-            qty = ex['quantity']
-            if ex['side'] == 'SLD':
-                qty = -qty
-
-            if position == 0:
-                # Opening trade
-                position = qty
-                entry_price = ex['price']
-                entry_time = ex['time']
-            elif (position > 0 and qty < 0) or (position < 0 and qty > 0):
-                # Closing trade
-                exit_price = ex['price']
-                exit_time = ex['time']
-
-                if position > 0:
-                    pnl = (exit_price - entry_price) * min(abs(position), abs(qty))
-                else:
-                    pnl = (entry_price - exit_price) * min(abs(position), abs(qty))
-
-                # Calculate duration
-                try:
-                    from datetime import datetime
-                    entry_dt = datetime.fromisoformat(entry_time.replace('Z', '+00:00')) if isinstance(entry_time, str) else entry_time
-                    exit_dt = datetime.fromisoformat(exit_time.replace('Z', '+00:00')) if isinstance(exit_time, str) else exit_time
-                    duration = (exit_dt - entry_dt).days
-                except:
-                    duration = 0
-
-                closed_trades.append({
-                    'symbol': symbol,
-                    'direction': 'LONG' if position > 0 else 'SHORT',
-                    'quantity': min(abs(position), abs(qty)),
-                    'entry_price': entry_price,
-                    'exit_price': exit_price,
-                    'entry_time': str(entry_time),
-                    'exit_time': str(exit_time),
-                    'pnl': round(pnl, 2),
-                    'pnl_pct': round((pnl / (entry_price * min(abs(position), abs(qty)))) * 100, 2),
-                    'duration': duration
-                })
-
-                # Update position
-                position += qty
-                if position != 0:
-                    entry_price = ex['price']
-                    entry_time = ex['time']
-            else:
-                # Adding to position
-                total_cost = position * entry_price + qty * ex['price']
-                position += qty
-                if position != 0:
-                    entry_price = total_cost / position
-
-    return closed_trades
-
-
 def get_portfolio_data(ib: IB) -> Dict:
     """Get all portfolio data from IB"""
     data = {
         'account': {},
         'positions': [],
         'closed_trades': [],
-        'executions': [],
         'total_unrealized_pnl': 0,
         'total_realized_pnl': 0,
         'daily_pnl': 0,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
 
-    # Account info
-    account_tags = [
-        'NetLiquidation', 'AvailableFunds', 'BuyingPower',
-        'TotalCashValue', 'UnrealizedPnL', 'RealizedPnL',
-        'GrossPositionValue', 'InitMarginReq', 'MaintMarginReq'
-    ]
-
+    # Account info - get ALL values first
     for av in ib.accountValues():
-        if av.tag in account_tags and av.currency == 'USD':
+        if av.currency in ['USD', 'BASE', '']:
             try:
                 data['account'][av.tag] = float(av.value)
             except:
                 pass
 
+    # Get UnrealizedPnL and DailyPnL directly from account summary
+    data['total_unrealized_pnl'] = data['account'].get('UnrealizedPnL', 0)
+    data['total_realized_pnl'] = data['account'].get('RealizedPnL', 0)
+
     # Portfolio positions
     portfolio = ib.portfolio()
+    logger.info(f"Found {len(portfolio)} portfolio items")
 
     for item in portfolio:
         symbol = item.contract.symbol
         quantity = item.position
-        avg_cost = item.averageCost
+        avg_cost = item.averageCost  # This is per share
         market_value = item.marketValue
         unrealized_pnl = item.unrealizedPNL
 
         if quantity == 0:
             continue
 
-        # Current price
-        if quantity != 0:
-            current_price = abs(market_value / quantity)
-        else:
-            current_price = avg_cost
+        # Current price from market value
+        current_price = abs(market_value / quantity) if quantity != 0 else avg_cost
 
-        # P&L percentage
-        cost_basis = avg_cost * abs(quantity)
+        # P&L percentage based on cost basis
+        cost_basis = abs(avg_cost * quantity)
         pnl_pct = (unrealized_pnl / cost_basis) * 100 if cost_basis != 0 else 0
 
         # Direction
         direction = "LONG" if quantity > 0 else "SHORT"
 
-        # Strategy
+        # Strategy from config
         strategy = get_ticker_strategy(symbol)
 
         data['positions'].append({
@@ -273,47 +164,67 @@ def get_portfolio_data(ib: IB) -> Dict:
             'market_value': round(market_value, 2),
             'unrealized_pnl': round(unrealized_pnl, 2),
             'pnl_pct': round(pnl_pct, 2),
-            'daily_pnl': 0  # Will be updated if available
         })
 
-        data['total_unrealized_pnl'] += unrealized_pnl
+        logger.info(f"  {symbol}: qty={quantity}, avg_cost={avg_cost:.2f}, "
+                   f"market_value={market_value:.2f}, unrealized_pnl={unrealized_pnl:.2f}")
 
-    # Get realized P&L from account
-    data['total_realized_pnl'] = data['account'].get('RealizedPnL', 0)
-
-    # Get daily P&L
+    # Get Daily PnL via PnL subscription
     try:
         accounts = ib.managedAccounts()
         if accounts:
             account_id = accounts[0]
+            # Subscribe to PnL updates
             ib.reqPnL(account_id, '')
-            ib.sleep(1)
-            for pnl in ib.pnl():
+            ib.sleep(2)  # Wait for data
+
+            pnl_list = ib.pnl()
+            for pnl in pnl_list:
                 if pnl.dailyPnL is not None and not math.isnan(pnl.dailyPnL):
-                    data['daily_pnl'] = pnl.dailyPnL
+                    data['daily_pnl'] = round(pnl.dailyPnL, 2)
+                    logger.info(f"Daily PnL from subscription: {data['daily_pnl']}")
                     break
+
+            # Cancel subscription
+            ib.cancelPnL(account_id)
     except Exception as e:
-        logger.warning(f"Could not get daily PnL: {e}")
+        logger.warning(f"Could not get daily PnL via subscription: {e}")
+
+    # If daily PnL still 0, try from account values
+    if data['daily_pnl'] == 0:
+        # Some TWS versions use different tags
+        for tag in ['DailyPnL', 'NetLiquidationByCurrency']:
+            if tag in data['account']:
+                logger.info(f"Found {tag} in account: {data['account'][tag]}")
 
     # Sort positions by unrealized P&L (best first)
     data['positions'].sort(key=lambda x: x['unrealized_pnl'], reverse=True)
 
-    # Get executions and closed trades
-    try:
-        executions = get_executions(ib)
-        data['executions'] = executions
-        data['closed_trades'] = get_closed_trades(executions)
-    except Exception as e:
-        logger.warning(f"Could not get closed trades: {e}")
+    # Log totals
+    logger.info(f"Total Unrealized PnL: {data['total_unrealized_pnl']}")
+    logger.info(f"Total Realized PnL: {data['total_realized_pnl']}")
+    logger.info(f"Daily PnL: {data['daily_pnl']}")
 
     return data
 
 
 def calculate_performance_metrics(history: Dict, current_data: Dict) -> Dict:
-    """Calculate performance metrics from history"""
+    """Calculate performance metrics from history
+
+    FORMELN:
+    - Sharpe Ratio = sqrt(252) * mean(daily_returns) / std(daily_returns)
+    - Sortino Ratio = sqrt(252) * mean(daily_returns) / std(negative_returns)
+    - Max Drawdown = max((peak - current) / peak)
+    - Profit Factor = sum(profits) / sum(losses)
+    """
+    initial_capital = history.get('initial_capital', INITIAL_CAPITAL)
+    current_capital = current_data['account'].get('NetLiquidation', 0)
+
     metrics = {
-        'initial_capital': 50000.00,  # Default, can be configured
-        'current_capital': current_data['account'].get('NetLiquidation', 0),
+        'initial_capital': initial_capital,
+        'current_capital': current_capital,
+        'total_return': 0,
+        'total_return_pct': 0,
         'profit_factor': 0,
         'sharpe_ratio': 0,
         'sortino_ratio': 0,
@@ -327,30 +238,38 @@ def calculate_performance_metrics(history: Dict, current_data: Dict) -> Dict:
         'win_rate': 0
     }
 
+    # Total return
+    if initial_capital > 0:
+        metrics['total_return'] = current_capital - initial_capital
+        metrics['total_return_pct'] = ((current_capital - initial_capital) / initial_capital) * 100
+
     equity_history = history.get('equity', [])
     trades = history.get('trades', [])
 
     # Calculate from equity history
     if len(equity_history) >= 2:
-        equities = [e['value'] for e in equity_history]
-        returns = []
-        for i in range(1, len(equities)):
-            if equities[i-1] != 0:
-                ret = (equities[i] - equities[i-1]) / equities[i-1]
-                returns.append(ret)
+        equities = [e['value'] for e in equity_history if e.get('value', 0) > 0]
 
-        if returns:
-            import numpy as np
-            returns = np.array(returns)
+        if len(equities) >= 2:
+            # Daily returns
+            returns = []
+            for i in range(1, len(equities)):
+                if equities[i-1] != 0:
+                    ret = (equities[i] - equities[i-1]) / equities[i-1]
+                    returns.append(ret)
 
-            # Sharpe Ratio (annualized, assuming daily data)
-            if np.std(returns) > 0:
-                metrics['sharpe_ratio'] = round(np.sqrt(252) * np.mean(returns) / np.std(returns), 2)
+            if returns:
+                import numpy as np
+                returns = np.array(returns)
 
-            # Sortino Ratio
-            negative_returns = returns[returns < 0]
-            if len(negative_returns) > 0 and np.std(negative_returns) > 0:
-                metrics['sortino_ratio'] = round(np.sqrt(252) * np.mean(returns) / np.std(negative_returns), 2)
+                # Sharpe Ratio (annualized)
+                if np.std(returns) > 0:
+                    metrics['sharpe_ratio'] = round(np.sqrt(252) * np.mean(returns) / np.std(returns), 2)
+
+                # Sortino Ratio
+                negative_returns = returns[returns < 0]
+                if len(negative_returns) > 0 and np.std(negative_returns) > 0:
+                    metrics['sortino_ratio'] = round(np.sqrt(252) * np.mean(returns) / np.std(negative_returns), 2)
 
             # Max Drawdown
             peak = equities[0]
@@ -362,20 +281,18 @@ def calculate_performance_metrics(history: Dict, current_data: Dict) -> Dict:
                 max_dd = max(max_dd, dd)
             metrics['max_drawdown'] = round(max_dd * 100, 2)
 
-        metrics['initial_capital'] = equities[0] if equities else 50000
-
     # Calculate from trades
     if trades:
-        profits = [t['pnl'] for t in trades if t['pnl'] > 0]
-        losses = [t['pnl'] for t in trades if t['pnl'] <= 0]
+        profits = [t['pnl'] for t in trades if t.get('pnl', 0) > 0]
+        losses = [t['pnl'] for t in trades if t.get('pnl', 0) <= 0]
 
         total_profit = sum(profits) if profits else 0
         total_loss = abs(sum(losses)) if losses else 0
 
         metrics['total_trades'] = len(trades)
         metrics['win_rate'] = round(len(profits) / len(trades) * 100, 1) if trades else 0
-        metrics['profit_factor'] = round(total_profit / total_loss, 2) if total_loss > 0 else total_profit
-        metrics['avg_trade'] = round(sum(t['pnl'] for t in trades) / len(trades), 2) if trades else 0
+        metrics['profit_factor'] = round(total_profit / total_loss, 2) if total_loss > 0 else (total_profit if total_profit > 0 else 0)
+        metrics['avg_trade'] = round(sum(t.get('pnl', 0) for t in trades) / len(trades), 2) if trades else 0
 
         # Avg duration
         durations = [t.get('duration', 0) for t in trades if t.get('duration')]
@@ -384,13 +301,13 @@ def calculate_performance_metrics(history: Dict, current_data: Dict) -> Dict:
         # Expectancy
         win_rate = len(profits) / len(trades) if trades else 0
         avg_win = sum(profits) / len(profits) if profits else 0
-        avg_loss = sum(losses) / len(losses) if losses else 0
-        metrics['expectancy'] = round(win_rate * avg_win - (1 - win_rate) * abs(avg_loss), 2)
+        avg_loss = abs(sum(losses) / len(losses)) if losses else 0
+        metrics['expectancy'] = round(win_rate * avg_win - (1 - win_rate) * avg_loss, 2)
 
         # Consecutive wins/losses
         max_wins = max_losses = current_wins = current_losses = 0
         for t in trades:
-            if t['pnl'] > 0:
+            if t.get('pnl', 0) > 0:
                 current_wins += 1
                 current_losses = 0
                 max_wins = max(max_wins, current_wins)
@@ -408,31 +325,36 @@ def calculate_performance_metrics(history: Dict, current_data: Dict) -> Dict:
 def update_history(history: Dict, data: Dict) -> Dict:
     """Update history with current data point"""
     today = datetime.now().strftime('%Y-%m-%d')
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # Update equity curve (one entry per day)
+    # Ensure initial capital is set
+    if 'initial_capital' not in history:
+        history['initial_capital'] = INITIAL_CAPITAL
+
+    # Update equity curve
     equity_value = data['account'].get('NetLiquidation', 0)
 
-    if history['equity']:
-        last_date = history['equity'][-1].get('date', '')
-        if last_date != today:
+    if equity_value > 0:  # Only save valid values
+        if history['equity']:
+            last_date = history['equity'][-1].get('date', '')
+            if last_date != today:
+                history['equity'].append({
+                    'date': today,
+                    'value': round(equity_value, 2),
+                    'timestamp': now
+                })
+            else:
+                history['equity'][-1] = {
+                    'date': today,
+                    'value': round(equity_value, 2),
+                    'timestamp': now
+                }
+        else:
             history['equity'].append({
                 'date': today,
-                'value': equity_value,
-                'timestamp': data['timestamp']
+                'value': round(equity_value, 2),
+                'timestamp': now
             })
-        else:
-            # Update today's entry
-            history['equity'][-1] = {
-                'date': today,
-                'value': equity_value,
-                'timestamp': data['timestamp']
-            }
-    else:
-        history['equity'].append({
-            'date': today,
-            'value': equity_value,
-            'timestamp': data['timestamp']
-        })
 
     # Update daily P&L
     daily_pnl = data.get('daily_pnl', 0)
@@ -441,36 +363,25 @@ def update_history(history: Dict, data: Dict) -> Dict:
         if last_date != today:
             history['daily_pnl'].append({
                 'date': today,
-                'value': daily_pnl
+                'value': round(daily_pnl, 2)
             })
         else:
             history['daily_pnl'][-1] = {
                 'date': today,
-                'value': daily_pnl
+                'value': round(daily_pnl, 2)
             }
     else:
         history['daily_pnl'].append({
             'date': today,
-            'value': daily_pnl
+            'value': round(daily_pnl, 2)
         })
 
-    # Update trades from closed trades
-    new_trades = data.get('closed_trades', [])
-    existing_trade_keys = set()
-    for t in history.get('trades', []):
-        key = f"{t['symbol']}_{t.get('exit_time', '')}_{t['pnl']}"
-        existing_trade_keys.add(key)
-
-    for trade in new_trades:
-        key = f"{trade['symbol']}_{trade.get('exit_time', '')}_{trade['pnl']}"
-        if key not in existing_trade_keys:
-            history['trades'].append(trade)
-            existing_trade_keys.add(key)
-
-    # Keep only last 90 days of data
+    # Keep only last 90 days
     history['equity'] = history['equity'][-90:]
     history['daily_pnl'] = history['daily_pnl'][-90:]
-    history['trades'] = history.get('trades', [])[-100:]  # Keep last 100 trades
+    if 'trades' not in history:
+        history['trades'] = []
+    history['trades'] = history['trades'][-100:]
 
     return history
 
@@ -479,10 +390,10 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
     """Generate HTML dashboard with charts"""
 
     # Prepare chart data
-    equity_labels = json.dumps([e['date'] for e in history.get('equity', [])][-30:])
+    equity_labels = json.dumps([e['date'][-5:] for e in history.get('equity', [])][-30:])  # MM-DD format
     equity_values = json.dumps([e['value'] for e in history.get('equity', [])][-30:])
 
-    daily_pnl_labels = json.dumps([p['date'] for p in history.get('daily_pnl', [])][-14:])
+    daily_pnl_labels = json.dumps([p['date'][-5:] for p in history.get('daily_pnl', [])][-14:])
     daily_pnl_values = json.dumps([p['value'] for p in history.get('daily_pnl', [])][-14:])
 
     # Position P&L for bar chart
@@ -494,7 +405,6 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
     positions_html = ""
     for pos in data['positions']:
         pnl_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
-        daily_pnl_display = f"${pos['daily_pnl']:+,.2f}" if pos['daily_pnl'] != 0 else "-"
 
         positions_html += f"""
         <tr>
@@ -503,40 +413,41 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
             <td>{pos['quantity']}</td>
             <td>${pos['avg_cost']:,.2f}</td>
             <td>${pos['current_price']:,.2f}</td>
-            <td>{daily_pnl_display}</td>
+            <td>${pos['market_value']:,.2f}</td>
             <td class="{pnl_class}">${pos['unrealized_pnl']:+,.2f}</td>
             <td class="{pnl_class}">{pos['pnl_pct']:+.2f}%</td>
         </tr>
         """
 
-    # Closed trades table rows
-    closed_trades = data.get('closed_trades', []) + history.get('trades', [])
-    # Remove duplicates and sort by exit time
-    seen = set()
-    unique_trades = []
-    for t in closed_trades:
-        key = f"{t['symbol']}_{t.get('exit_time', '')}_{t['pnl']}"
-        if key not in seen:
-            seen.add(key)
-            unique_trades.append(t)
-    closed_trades = sorted(unique_trades, key=lambda x: x.get('exit_time', ''), reverse=True)[:20]
+    # Closed trades from history
+    closed_trades = history.get('trades', [])
+    closed_trades = sorted(closed_trades, key=lambda x: x.get('exit_time', ''), reverse=True)[:20]
 
     closed_trades_html = ""
     total_closed_pnl = 0
     for trade in closed_trades:
-        pnl_class = "positive" if trade['pnl'] >= 0 else "negative"
-        total_closed_pnl += trade['pnl']
+        pnl_class = "positive" if trade.get('pnl', 0) >= 0 else "negative"
+        total_closed_pnl += trade.get('pnl', 0)
+
+        # Format entry/exit times
+        entry_time = trade.get('entry_time', 'N/A')
+        exit_time = trade.get('exit_time', 'N/A')
+        if isinstance(entry_time, str) and len(entry_time) > 10:
+            entry_time = entry_time[:10]  # Just date
+        if isinstance(exit_time, str) and len(exit_time) > 10:
+            exit_time = exit_time[:10]
 
         closed_trades_html += f"""
         <tr>
-            <td><strong>{trade['symbol']}</strong></td>
-            <td><span class="badge {trade['direction'].lower()}">{trade['direction']}</span></td>
-            <td>{trade['quantity']}</td>
-            <td>${trade['entry_price']:,.2f}</td>
-            <td>${trade['exit_price']:,.2f}</td>
+            <td><strong>{trade.get('symbol', 'N/A')}</strong></td>
+            <td><span class="badge {trade.get('direction', 'LONG').lower()}">{trade.get('direction', 'LONG')}</span></td>
+            <td>{trade.get('quantity', 0)}</td>
+            <td>{entry_time}</td>
+            <td>${trade.get('entry_price', 0):,.2f}</td>
+            <td>${trade.get('exit_price', 0):,.2f}</td>
             <td>{trade.get('duration', 0)}d</td>
-            <td class="{pnl_class}">${trade['pnl']:+,.2f}</td>
-            <td class="{pnl_class}">{trade['pnl_pct']:+.2f}%</td>
+            <td class="{pnl_class}">${trade.get('pnl', 0):+,.2f}</td>
+            <td class="{pnl_class}">{trade.get('pnl_pct', 0):+.2f}%</td>
         </tr>
         """
 
@@ -556,13 +467,15 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
     unrealized_class = "positive" if unrealized >= 0 else "negative"
     realized_class = "positive" if realized >= 0 else "negative"
 
-    # Equity change
+    # Equity change from history
     equity_change = 0
-    if history.get('equity') and len(history['equity']) >= 2:
-        equity_change = history['equity'][-1]['value'] - history['equity'][0]['value']
+    if history.get('equity') and len(history['equity']) >= 1:
+        initial = history.get('initial_capital', INITIAL_CAPITAL)
+        current = history['equity'][-1]['value']
+        equity_change = current - initial
     equity_change_class = "positive" if equity_change >= 0 else "negative"
 
-    refresh_meta = '<meta http-equiv="refresh" content="60">' if auto_refresh else ''
+    refresh_meta = '<meta http-equiv="refresh" content="30">' if auto_refresh else ''
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -705,12 +618,6 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
             margin-bottom: 15px;
         }}
 
-        .metrics-grid {{
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-        }}
-
         .metric-row {{
             display: flex;
             justify-content: space-between;
@@ -733,6 +640,7 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
             border-radius: 8px;
             padding: 20px;
             border: 1px solid var(--border);
+            margin-bottom: 20px;
         }}
 
         .positions-title {{
@@ -789,6 +697,15 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
             color: var(--negative);
         }}
 
+        .formula-note {{
+            background: var(--bg-card-alt);
+            border-left: 3px solid var(--accent);
+            padding: 10px 15px;
+            margin: 20px 0;
+            font-size: 0.85em;
+            color: var(--text-secondary);
+        }}
+
         @media (max-width: 1200px) {{
             .summary-grid {{ grid-template-columns: repeat(3, 1fr); }}
             .charts-row {{ grid-template-columns: 1fr; }}
@@ -836,7 +753,7 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
     <div class="charts-row">
         <div class="chart-card">
             <div class="chart-header">
-                <span class="chart-title">Kapitalkurve (R+U)</span>
+                <span class="chart-title">Kapitalkurve (Equity)</span>
                 <span class="chart-value {equity_change_class}">${equity_change:+,.2f}</span>
             </div>
             <div class="chart-container">
@@ -846,7 +763,7 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
         <div class="chart-card">
             <div class="chart-header">
                 <span class="chart-title">Daily PnL</span>
-                <span class="chart-value">Recording data...</span>
+                <span class="chart-value {daily_class}">${daily:+,.2f}</span>
             </div>
             <div class="chart-container">
                 <canvas id="dailyPnlChart"></canvas>
@@ -857,7 +774,7 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
     <div class="bottom-row">
         <div class="chart-card">
             <div class="chart-header">
-                <span class="chart-title">Unrealized PnL</span>
+                <span class="chart-title">Unrealized PnL by Position</span>
                 <span class="chart-value {unrealized_class}">${unrealized:+,.2f}</span>
             </div>
             <div class="chart-container">
@@ -873,6 +790,10 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
             <div class="metric-row">
                 <span class="metric-label">Current Capital</span>
                 <span class="metric-value">${metrics['current_capital']:,.2f}</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Total Return</span>
+                <span class="metric-value {equity_change_class}">${metrics['total_return']:+,.2f} ({metrics['total_return_pct']:+.1f}%)</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Profit Factor</span>
@@ -891,24 +812,16 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
                 <span class="metric-value">{metrics['max_drawdown']}%</span>
             </div>
             <div class="metric-row">
+                <span class="metric-label">Win Rate</span>
+                <span class="metric-value">{metrics['win_rate']}%</span>
+            </div>
+            <div class="metric-row">
                 <span class="metric-label">Avg Trade</span>
                 <span class="metric-value">${metrics['avg_trade']}</span>
             </div>
             <div class="metric-row">
-                <span class="metric-label">Avg Duration</span>
-                <span class="metric-value">{metrics['avg_duration']} days</span>
-            </div>
-            <div class="metric-row">
                 <span class="metric-label">Expectancy</span>
                 <span class="metric-value">${metrics['expectancy']}</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Max Consec. Wins</span>
-                <span class="metric-value">{metrics['max_consec_wins']}</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Max Consec. Losses</span>
-                <span class="metric-value">{metrics['max_consec_losses']}</span>
             </div>
         </div>
     </div>
@@ -922,8 +835,8 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
                     <th>Direction</th>
                     <th>Qty</th>
                     <th>Avg Cost</th>
-                    <th>Market Price</th>
-                    <th>Daily PnL</th>
+                    <th>Current Price</th>
+                    <th>Market Value</th>
                     <th>Unrealized PnL</th>
                     <th>PnL %</th>
                 </tr>
@@ -934,7 +847,7 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
         </table>
     </div>
 
-    <div class="positions-card" style="margin-top: 20px;">
+    <div class="positions-card">
         <div class="positions-title">Closed Trades ({num_closed}) <span class="{closed_pnl_class}" style="float:right;">Total: ${total_closed_pnl:+,.2f}</span></div>
         <table class="positions-table">
             <thead>
@@ -942,17 +855,23 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
                     <th>Symbol</th>
                     <th>Direction</th>
                     <th>Qty</th>
-                    <th>Entry</th>
-                    <th>Exit</th>
+                    <th>Entry Date</th>
+                    <th>Entry Price</th>
+                    <th>Exit Price</th>
                     <th>Duration</th>
                     <th>P&L $</th>
                     <th>P&L %</th>
                 </tr>
             </thead>
             <tbody>
-                {closed_trades_html if closed_trades_html else '<tr><td colspan="8" style="text-align:center; padding:40px; color:var(--text-secondary);">No closed trades</td></tr>'}
+                {closed_trades_html if closed_trades_html else '<tr><td colspan="9" style="text-align:center; padding:40px; color:var(--text-secondary);">No closed trades yet. Trades werden gespeichert wenn du sie manuell hinzufügst.</td></tr>'}
             </tbody>
         </table>
+    </div>
+
+    <div class="formula-note">
+        <strong>Hinweis zur Kapitalkurve:</strong> Die Kurve zeigt NetLiquidation über Zeit (Cash + Unrealized PnL).
+        Daten werden täglich in <code>portfolio_history.json</code> gespeichert. Je öfter du das Script ausführst, desto mehr Datenpunkte.
     </div>
 
     <script>
@@ -961,27 +880,41 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
         Chart.defaults.borderColor = '#2d3e50';
 
         // Equity Chart
+        const equityData = {equity_values};
+        const hasEquityData = equityData.length > 0;
+
         new Chart(document.getElementById('equityChart'), {{
             type: 'line',
             data: {{
                 labels: {equity_labels},
                 datasets: [{{
-                    data: {equity_values},
+                    data: equityData,
                     borderColor: '#00d26a',
                     backgroundColor: 'rgba(0, 210, 106, 0.1)',
                     fill: true,
                     tension: 0.4,
-                    pointRadius: 0,
+                    pointRadius: hasEquityData ? 3 : 0,
                     borderWidth: 2
                 }}]
             }},
             options: {{
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: {{ legend: {{ display: false }} }},
+                plugins: {{
+                    legend: {{ display: false }},
+                    title: {{
+                        display: !hasEquityData,
+                        text: 'Noch keine Daten - führe das Script täglich aus',
+                        color: '#8899a6'
+                    }}
+                }},
                 scales: {{
-                    x: {{ display: false }},
+                    x: {{
+                        display: hasEquityData,
+                        grid: {{ color: '#2d3e50' }}
+                    }},
                     y: {{
+                        display: hasEquityData,
                         grid: {{ color: '#2d3e50' }},
                         ticks: {{ callback: v => '$' + v.toLocaleString() }}
                     }}
@@ -991,6 +924,7 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
 
         // Daily P&L Chart
         const dailyPnlData = {daily_pnl_values};
+        const hasDailyData = dailyPnlData.length > 0 && dailyPnlData.some(v => v !== 0);
         const dailyPnlColors = dailyPnlData.map(v => v >= 0 ? '#00d26a' : '#ff4757');
 
         new Chart(document.getElementById('dailyPnlChart'), {{
@@ -1006,10 +940,18 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
             options: {{
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: {{ legend: {{ display: false }} }},
+                plugins: {{
+                    legend: {{ display: false }},
+                    title: {{
+                        display: !hasDailyData,
+                        text: 'Daily PnL wird von TWS abgerufen',
+                        color: '#8899a6'
+                    }}
+                }},
                 scales: {{
-                    x: {{ display: false }},
+                    x: {{ display: hasDailyData }},
                     y: {{
+                        display: hasDailyData,
                         grid: {{ color: '#2d3e50' }},
                         ticks: {{ callback: v => '$' + v.toLocaleString() }}
                     }}
@@ -1056,6 +998,40 @@ def generate_html(data: Dict, history: Dict, metrics: Dict, auto_refresh: bool =
     return html
 
 
+def add_manual_trade(history: Dict, symbol: str, direction: str, quantity: int,
+                     entry_price: float, exit_price: float, entry_date: str, exit_date: str) -> Dict:
+    """Manually add a closed trade to history"""
+    pnl = (exit_price - entry_price) * quantity if direction == 'LONG' else (entry_price - exit_price) * quantity
+    pnl_pct = (pnl / (entry_price * quantity)) * 100
+
+    # Calculate duration
+    try:
+        entry_dt = datetime.strptime(entry_date, '%Y-%m-%d')
+        exit_dt = datetime.strptime(exit_date, '%Y-%m-%d')
+        duration = (exit_dt - entry_dt).days
+    except:
+        duration = 0
+
+    trade = {
+        'symbol': symbol,
+        'direction': direction,
+        'quantity': quantity,
+        'entry_price': entry_price,
+        'exit_price': exit_price,
+        'entry_time': entry_date,
+        'exit_time': exit_date,
+        'pnl': round(pnl, 2),
+        'pnl_pct': round(pnl_pct, 2),
+        'duration': duration
+    }
+
+    if 'trades' not in history:
+        history['trades'] = []
+    history['trades'].append(trade)
+
+    return history
+
+
 def main():
     print("="*60)
     print("TWS DASHBOARD GENERATOR")
@@ -1076,6 +1052,8 @@ def main():
 
     # Load history
     history = load_history()
+    print(f"Loaded history: {len(history.get('equity', []))} equity points, "
+          f"{len(history.get('trades', []))} trades")
 
     # Connect to IB
     ib = connect_to_ib(port)
@@ -1100,6 +1078,7 @@ def main():
         # Update history
         history = update_history(history, data)
         save_history(history)
+        print(f"History updated and saved")
 
         ib.disconnect()
         print("Disconnected from TWS")
@@ -1115,13 +1094,18 @@ def main():
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(html)
 
-    print(f"\n✓ Dashboard saved to: {OUTPUT_FILE}")
-    print(f"  Positions: {len(data['positions'])}")
-    print(f"  Unrealized P&L: ${data['total_unrealized_pnl']:+,.2f}")
-    print(f"  Daily P&L: ${data['daily_pnl']:+,.2f}")
+    print(f"\n{'='*60}")
+    print(f"✓ Dashboard saved to: {OUTPUT_FILE}")
+    print(f"{'='*60}")
+    print(f"  Net Liquidation:   ${data['account'].get('NetLiquidation', 0):,.2f}")
+    print(f"  Unrealized PnL:    ${data['total_unrealized_pnl']:+,.2f}")
+    print(f"  Realized PnL:      ${data['total_realized_pnl']:+,.2f}")
+    print(f"  Daily PnL:         ${data['daily_pnl']:+,.2f}")
+    print(f"  Open Positions:    {len(data['positions'])}")
+    print(f"  Closed Trades:     {len(history.get('trades', []))}")
 
     if auto_refresh:
-        print("\n  Auto-refresh: 60 seconds")
+        print(f"\n  Auto-refresh: 30 seconds")
 
     # Try to open in browser
     try:
@@ -1130,6 +1114,13 @@ def main():
         print("\n  Opened in browser")
     except:
         print(f"\n  Open {OUTPUT_FILE} in your browser")
+
+    print(f"\n{'='*60}")
+    print("HINWEISE:")
+    print("- Kapitalkurve: Wird über Zeit aufgebaut (1 Punkt pro Tag)")
+    print("- Closed Trades: Müssen manuell hinzugefügt werden")
+    print("- Daily PnL: Kommt direkt von TWS (reqPnL)")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
