@@ -1,0 +1,9 @@
+{
+  "initial_capital": 50000,
+  "num_positions": 30,
+  "entry_fee": 1.0,
+  "exit_fee": 1.0,
+  "flex_token": "",
+  "flex_query_id": "1374946",
+  "ib_port": 7497
+}

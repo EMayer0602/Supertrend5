@@ -209,6 +209,141 @@ Um FlexQuery zu aktivieren:
         print("\n⚠ Setup unvollständig. Führe --setup-flex erneut aus.")
 
 
+def test_flexquery():
+    """Test and diagnose FlexQuery data"""
+    from collections import Counter, defaultdict
+
+    print("\n" + "="*60)
+    print("FLEXQUERY DIAGNOSE")
+    print("="*60)
+
+    config = load_config()
+    token = config.get('flex_token', '')
+    query_id = config.get('flex_query_id', '')
+
+    if not token or not query_id:
+        print("\n⚠ FlexQuery nicht konfiguriert!")
+        print("  Führe aus: python generate_dashboard.py --setup-flex")
+        return
+
+    print(f"\nToken: {token[:10]}...")
+    print(f"Query ID: {query_id}")
+
+    print("\nFetching trades from FlexQuery...")
+    trades = fetch_flexquery_trades(token, query_id)
+
+    if not trades:
+        print("\n⚠ Keine Trades gefunden!")
+        print("""
+LÖSUNG: FlexQuery in IB konfigurieren für 90 Tage:
+
+1. Gehe zu: https://www.interactivebrokers.com/sso/Login
+2. Account Management -> Reports -> Flex Queries
+3. Finde Query ID {query_id} und klicke "Edit"
+4. Setze "Period" auf "Last 90 Calendar Days"
+5. Unter "Sections" aktiviere "Trades"
+6. Speichern
+""".format(query_id=query_id))
+        return
+
+    # Analyze trades
+    print(f"\n{'='*60}")
+    print(f"ERGEBNIS: {len(trades)} Trades gefunden")
+    print(f"{'='*60}")
+
+    # Date range
+    dates = [t['trade_date'] for t in trades if t.get('trade_date')]
+    if dates:
+        min_date = min(dates)
+        max_date = max(dates)
+        print(f"\nDatum-Range: {min_date} bis {max_date}")
+
+        # Days covered
+        try:
+            if '-' in min_date:
+                d1 = datetime.strptime(min_date, '%Y-%m-%d')
+                d2 = datetime.strptime(max_date, '%Y-%m-%d')
+            else:
+                d1 = datetime.strptime(min_date, '%Y%m%d')
+                d2 = datetime.strptime(max_date, '%Y%m%d')
+            days = (d2 - d1).days + 1
+            print(f"Tage: {days}")
+
+            if days < 30:
+                print(f"\n⚠ WARNUNG: FlexQuery liefert nur {days} Tage!")
+                print("  Konfiguriere FlexQuery für 90 Tage (siehe unten)")
+        except:
+            pass
+
+    # Symbols
+    symbols = set(t['symbol'] for t in trades)
+    print(f"\nSymbole: {len(symbols)}")
+    print(f"  {', '.join(sorted(symbols)[:20])}")
+    if len(symbols) > 20:
+        print(f"  ... und {len(symbols) - 20} weitere")
+
+    # Trades per side
+    sides = Counter(t['side'] for t in trades)
+    print(f"\nTrade-Typen:")
+    for side, count in sides.items():
+        print(f"  {side}: {count}")
+
+    # Trades per symbol
+    symbol_counts = Counter(t['symbol'] for t in trades)
+    print(f"\nTrades pro Symbol (Top 10):")
+    for sym, count in symbol_counts.most_common(10):
+        print(f"  {sym}: {count}")
+
+    # Process into positions
+    print(f"\n{'='*60}")
+    print("KONSOLIDIERTE POSITIONEN")
+    print(f"{'='*60}")
+
+    open_pos, closed = process_trades_to_positions(trades)
+
+    print(f"\nOffene Positionen: {len(open_pos)}")
+    if open_pos:
+        for p in open_pos:
+            print(f"  {p['symbol']:8} {p['direction']:5} qty={p['quantity']:3} entry={p['entry_date']} {p.get('entry_time', '')}")
+
+    print(f"\nGeschlossene Trades: {len(closed)}")
+    if closed:
+        for t in closed[:10]:
+            pnl_str = f"${t['pnl']:+.2f}"
+            print(f"  {t['symbol']:8} {t['entry_date']} -> {t['exit_date']} {pnl_str:>10}")
+        if len(closed) > 10:
+            print(f"  ... und {len(closed) - 10} weitere")
+
+    # Summary
+    total_pnl = sum(t['pnl'] for t in closed)
+    print(f"\nTotal Realized P&L: ${total_pnl:,.2f}")
+
+    # Instructions for 90 days
+    print(f"""
+{'='*60}
+FLEXQUERY FÜR 90 TAGE KONFIGURIEREN
+{'='*60}
+
+Falls nicht alle Trades angezeigt werden:
+
+1. Gehe zu: IB Account Management
+   https://www.interactivebrokers.com/sso/Login
+
+2. Reports -> Flex Queries -> Custom Flex Queries
+
+3. Finde Query ID {query_id} und klicke "Configure"
+
+4. Unter "Delivery Configuration":
+   - Period: "Last 90 Calendar Days"
+
+5. Unter "Sections":
+   - Aktiviere "Trades" mit allen Feldern
+
+6. Speichern und erneut testen:
+   python generate_dashboard.py --test-flex
+""".format(query_id=query_id))
+
+
 def fetch_flexquery_trades(token: str, query_id: str, max_retries: int = 3) -> List[Dict]:
     """Fetch trades from IB FlexQuery API"""
     if not token or not query_id:
@@ -1398,6 +1533,11 @@ def main():
     # Check for setup mode
     if "--setup-flex" in sys.argv:
         setup_flexquery()
+        return
+
+    # Check for test mode
+    if "--test-flex" in sys.argv:
+        test_flexquery()
         return
 
     # Load config
