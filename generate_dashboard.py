@@ -362,9 +362,12 @@ def fetch_flexquery_trades(token: str, query_id: str, max_retries: int = 3) -> L
         }
 
         response = requests.get(FLEX_REQUEST_URL, params=request_params, timeout=30)
+        logger.info(f"Response status: {response.status_code}")
+        logger.info(f"Response preview: {response.text[:300]}")
 
         if response.status_code != 200:
             logger.error(f"FlexQuery request failed: {response.status_code}")
+            logger.error(f"Response: {response.text[:500]}")
             return []
 
         # Parse response to get reference code
