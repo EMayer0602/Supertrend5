@@ -358,20 +358,54 @@ def parse_flexquery_trades(xml_text: str) -> List[Dict]:
 def process_trades_to_positions(trades: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
     """
     Process raw trades into open positions and closed trades
+    Combines partial fills on the same day into single entries
     Returns: (open_positions, closed_trades)
     """
     from collections import defaultdict
 
-    # Group trades by symbol
-    trades_by_symbol = defaultdict(list)
+    # Step 1: Combine partial fills on the same day
+    # Key: (symbol, date, side)
+    combined = defaultdict(lambda: {'quantity': 0, 'total_value': 0, 'commission': 0, 'time': ''})
+
     for trade in trades:
+        key = (trade['symbol'], trade['trade_date'], trade['side'])
+        combined[key]['quantity'] += trade['quantity']
+        combined[key]['total_value'] += trade['quantity'] * trade['price']
+        combined[key]['commission'] += trade['commission']
+        # Keep first time
+        if not combined[key]['time']:
+            combined[key]['time'] = trade['trade_time']
+
+    # Convert back to trade list
+    consolidated_trades = []
+    for (symbol, date, side), data in combined.items():
+        if data['quantity'] > 0:
+            avg_price = data['total_value'] / data['quantity']
+            consolidated_trades.append({
+                'symbol': symbol,
+                'trade_date': date,
+                'trade_time': data['time'],
+                'datetime': f"{date} {data['time']}",
+                'side': side,
+                'quantity': data['quantity'],
+                'price': avg_price,
+                'commission': data['commission']
+            })
+
+    # Sort by datetime
+    consolidated_trades.sort(key=lambda x: x.get('datetime', ''))
+
+    logger.info(f"Consolidated {len(trades)} partial fills into {len(consolidated_trades)} trades")
+
+    # Step 2: Process consolidated trades into positions
+    trades_by_symbol = defaultdict(list)
+    for trade in consolidated_trades:
         trades_by_symbol[trade['symbol']].append(trade)
 
     open_positions = []
     closed_trades = []
 
     for symbol, symbol_trades in trades_by_symbol.items():
-        # Sort by datetime
         symbol_trades.sort(key=lambda x: x.get('datetime', ''))
 
         position = 0
@@ -409,10 +443,16 @@ def process_trades_to_positions(trades: List[Dict]) -> Tuple[List[Dict], List[Di
 
                 pnl_pct = (pnl / (entry_price * close_qty)) * 100 if entry_price * close_qty != 0 else 0
 
-                # Calculate duration
+                # Calculate duration - handle both YYYYMMDD and YYYY-MM-DD formats
                 try:
-                    entry_dt = datetime.strptime(entry_date, '%Y%m%d')
-                    exit_dt = datetime.strptime(exit_date, '%Y%m%d')
+                    if '-' in entry_date:
+                        entry_dt = datetime.strptime(entry_date, '%Y-%m-%d')
+                    else:
+                        entry_dt = datetime.strptime(entry_date, '%Y%m%d')
+                    if '-' in exit_date:
+                        exit_dt = datetime.strptime(exit_date, '%Y-%m-%d')
+                    else:
+                        exit_dt = datetime.strptime(exit_date, '%Y%m%d')
                     duration = (exit_dt - entry_dt).days
                 except:
                     duration = 0
@@ -437,7 +477,6 @@ def process_trades_to_positions(trades: List[Dict]) -> Tuple[List[Dict], List[Di
                 # Update position
                 position += qty
                 if position != 0:
-                    # Still have remaining position
                     entry_price = trade['price']
                     entry_date = trade['trade_date']
                     entry_time = trade['trade_time']
@@ -460,7 +499,7 @@ def process_trades_to_positions(trades: List[Dict]) -> Tuple[List[Dict], List[Di
                 'entry_date': entry_date,
                 'entry_time': entry_time,
                 'entry_fee': entry_commission,
-                'current_price': 0,  # Will be updated from TWS
+                'current_price': 0,
                 'unrealized_pnl': 0,
                 'pnl_pct': 0
             })
@@ -802,8 +841,8 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     """Generate HTML dashboard"""
 
     # Chart data
-    equity_labels = json.dumps([e['date'][-5:] for e in equity_curve[-30:]])
-    equity_values = json.dumps([e['value'] for e in equity_curve[-30:]])
+    equity_labels = json.dumps([e['date'][-5:] for e in equity_curve[-90:]])
+    equity_values = json.dumps([e['value'] for e in equity_curve[-90:]])
 
     daily_pnl_labels = json.dumps([e['date'][-5:] for e in equity_curve[-14:]])
     daily_pnl_values = json.dumps([e.get('daily_pnl', 0) for e in equity_curve[-14:]])
@@ -853,7 +892,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     from datetime import datetime, timedelta
     cutoff_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
     recent_trades = [t for t in closed_trades if t.get('exit_date', '') >= cutoff_date]
-    closed_trades_sorted = sorted(recent_trades, key=lambda x: x.get('exit_date', ''), reverse=True)[:50]
+    closed_trades_sorted = sorted(recent_trades, key=lambda x: x.get('exit_date', ''), reverse=True)
     closed_trades_html = ""
     total_closed_pnl = sum(t.get('pnl', 0) for t in recent_trades)
 
