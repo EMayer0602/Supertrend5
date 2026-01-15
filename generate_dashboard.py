@@ -814,17 +814,35 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
 
     for trade in closed_trades_sorted:
         pnl_class = "positive" if trade.get('pnl', 0) >= 0 else "negative"
+
+        # Entry date/time formatting
         entry_date = trade.get('entry_date', 'N/A')
+        entry_time = trade.get('entry_time', '')
         if len(entry_date) == 8:
-            entry_date = f"{entry_date[:4]}-{entry_date[4:6]}-{entry_date[6:8]}"
+            entry_date = f"{entry_date[4:6]}-{entry_date[6:8]}"
+        if entry_time and len(entry_time) >= 5:
+            entry_datetime = f"{entry_date} {entry_time[:5]}"
+        else:
+            entry_datetime = entry_date
+
+        # Exit date/time formatting
+        exit_date = trade.get('exit_date', 'N/A')
+        exit_time = trade.get('exit_time', '')
+        if len(exit_date) == 8:
+            exit_date = f"{exit_date[4:6]}-{exit_date[6:8]}"
+        if exit_time and len(exit_time) >= 5:
+            exit_datetime = f"{exit_date} {exit_time[:5]}"
+        else:
+            exit_datetime = exit_date
 
         closed_trades_html += f"""
         <tr>
             <td><strong>{trade.get('symbol', 'N/A')}</strong></td>
             <td><span class="badge {trade.get('direction', 'LONG').lower()}">{trade.get('direction', 'LONG')}</span></td>
             <td>{trade.get('quantity', 0)}</td>
-            <td>{entry_date}</td>
+            <td>{entry_datetime}</td>
             <td>${trade.get('entry_price', 0):,.2f}</td>
+            <td>{exit_datetime}</td>
             <td>${trade.get('exit_price', 0):,.2f}</td>
             <td>{trade.get('duration', 0)}d</td>
             <td class="{pnl_class}">${trade.get('pnl', 0):+,.2f}</td>
@@ -1146,16 +1164,17 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
                     <th>Symbol</th>
                     <th>Direction</th>
                     <th>Qty</th>
-                    <th>Entry Date</th>
+                    <th>Entry</th>
                     <th>Entry Price</th>
+                    <th>Exit</th>
                     <th>Exit Price</th>
-                    <th>Duration</th>
+                    <th>Days</th>
                     <th>P&L $</th>
                     <th>P&L %</th>
                 </tr>
             </thead>
             <tbody>
-                {closed_trades_html if closed_trades_html else '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-secondary);">No closed trades yet</td></tr>'}
+                {closed_trades_html if closed_trades_html else '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-secondary);">No closed trades yet</td></tr>'}
             </tbody>
         </table>
     </div>
