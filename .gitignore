@@ -22,3 +22,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Config with sensitive data
+dashboard_config.json
+portfolio_history.json
