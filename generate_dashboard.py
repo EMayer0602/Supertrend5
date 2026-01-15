@@ -810,23 +810,44 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     positions_html = ""
     for pos in positions:
         pnl_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
+        # Entry date/time formatting
+        entry_date = pos.get('entry_date', '')
+        entry_time = pos.get('entry_time', '')
+        if len(entry_date) == 8 and entry_date.isdigit():
+            entry_date_fmt = f"{entry_date[:4]}-{entry_date[4:6]}-{entry_date[6:8]}"
+        elif len(entry_date) == 10 and '-' in entry_date:
+            entry_date_fmt = entry_date
+        else:
+            entry_date_fmt = entry_date or 'N/A'
+        if entry_time and len(entry_time) >= 4:
+            h = entry_time[:2]
+            m = entry_time[2:4]
+            entry_datetime = f"{entry_date_fmt} {h}:{m}"
+        else:
+            entry_datetime = entry_date_fmt
+        entry_fee = pos.get('entry_fee', 0)
         positions_html += f"""
         <tr>
             <td><strong>{pos['symbol']}</strong></td>
             <td><span class="badge {pos['direction'].lower()}">{pos['direction']}</span></td>
             <td>{pos['quantity']}</td>
+            <td>{entry_datetime}</td>
             <td>${pos['entry_price']:,.2f}</td>
             <td>${pos['current_price']:,.2f}</td>
+            <td>${entry_fee:,.2f}</td>
             <td>${pos.get('market_value', 0):,.2f}</td>
             <td class="{pnl_class}">${pos['unrealized_pnl']:+,.2f}</td>
             <td class="{pnl_class}">{pos['pnl_pct']:+.2f}%</td>
         </tr>
         """
 
-    # Closed trades table
-    closed_trades_sorted = sorted(closed_trades, key=lambda x: x.get('exit_date', ''), reverse=True)[:20]
+    # Closed trades table - last quarter only (90 days)
+    from datetime import datetime, timedelta
+    cutoff_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+    recent_trades = [t for t in closed_trades if t.get('exit_date', '') >= cutoff_date]
+    closed_trades_sorted = sorted(recent_trades, key=lambda x: x.get('exit_date', ''), reverse=True)[:50]
     closed_trades_html = ""
-    total_closed_pnl = sum(t.get('pnl', 0) for t in closed_trades)
+    total_closed_pnl = sum(t.get('pnl', 0) for t in recent_trades)
 
     for trade in closed_trades_sorted:
         pnl_class = "positive" if trade.get('pnl', 0) >= 0 else "negative"
@@ -837,53 +858,38 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         # Handle YYYYMMDD format
         if len(entry_date) == 8 and entry_date.isdigit():
             entry_date_fmt = f"{entry_date[:4]}-{entry_date[4:6]}-{entry_date[6:8]}"
-        # Handle YYYY-MM-DD format (keep as is)
         elif len(entry_date) == 10 and '-' in entry_date:
             entry_date_fmt = entry_date
         else:
             entry_date_fmt = entry_date
-        # Add time if available (format: HHmmss or HH:mm:ss)
-        if entry_time:
-            if ':' in entry_time:
-                # Already formatted HH:mm:ss
-                entry_datetime = f"{entry_date_fmt} {entry_time[:5]}"
-            elif len(entry_time) >= 6:
-                # HHmmss format -> HH:mm
-                entry_datetime = f"{entry_date_fmt} {entry_time[:2]}:{entry_time[2:4]}"
-            elif len(entry_time) >= 4:
-                # HHmm format -> HH:mm
-                entry_datetime = f"{entry_date_fmt} {entry_time[:2]}:{entry_time[2:4]}"
-            else:
-                entry_datetime = entry_date_fmt
+        # Format time HHmmss -> HH:mm
+        if entry_time and len(entry_time) >= 4:
+            h = entry_time[:2]
+            m = entry_time[2:4]
+            entry_datetime = f"{entry_date_fmt} {h}:{m}"
         else:
             entry_datetime = entry_date_fmt
 
         # Exit date/time formatting
         exit_date = trade.get('exit_date', 'N/A')
         exit_time = trade.get('exit_time', '')
-        # Handle YYYYMMDD format
         if len(exit_date) == 8 and exit_date.isdigit():
             exit_date_fmt = f"{exit_date[:4]}-{exit_date[4:6]}-{exit_date[6:8]}"
-        # Handle YYYY-MM-DD format (keep as is)
         elif len(exit_date) == 10 and '-' in exit_date:
             exit_date_fmt = exit_date
         else:
             exit_date_fmt = exit_date
-        # Add time if available (format: HHmmss or HH:mm:ss)
-        if exit_time:
-            if ':' in exit_time:
-                # Already formatted HH:mm:ss
-                exit_datetime = f"{exit_date_fmt} {exit_time[:5]}"
-            elif len(exit_time) >= 6:
-                # HHmmss format -> HH:mm
-                exit_datetime = f"{exit_date_fmt} {exit_time[:2]}:{exit_time[2:4]}"
-            elif len(exit_time) >= 4:
-                # HHmm format -> HH:mm
-                exit_datetime = f"{exit_date_fmt} {exit_time[:2]}:{exit_time[2:4]}"
-            else:
-                exit_datetime = exit_date_fmt
+        # Format time HHmmss -> HH:mm
+        if exit_time and len(exit_time) >= 4:
+            h = exit_time[:2]
+            m = exit_time[2:4]
+            exit_datetime = f"{exit_date_fmt} {h}:{m}"
         else:
             exit_datetime = exit_date_fmt
+
+        entry_fee = trade.get('entry_fee', 0)
+        exit_fee = trade.get('exit_fee', 0)
+        total_fee = entry_fee + exit_fee
 
         closed_trades_html += f"""
         <tr>
@@ -894,6 +900,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             <td>${trade.get('entry_price', 0):,.2f}</td>
             <td>{exit_datetime}</td>
             <td>${trade.get('exit_price', 0):,.2f}</td>
+            <td>${total_fee:,.2f}</td>
             <td>{trade.get('duration', 0)}d</td>
             <td class="{pnl_class}">${trade.get('pnl', 0):+,.2f}</td>
             <td class="{pnl_class}">{trade.get('pnl_pct', 0):+.2f}%</td>
@@ -1200,21 +1207,23 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
                     <th>Symbol</th>
                     <th>Direction</th>
                     <th>Qty</th>
+                    <th>Entry</th>
                     <th>Entry Price</th>
                     <th>Current Price</th>
+                    <th>Fee</th>
                     <th>Market Value</th>
                     <th>Unrealized PnL</th>
                     <th>PnL %</th>
                 </tr>
             </thead>
             <tbody>
-                {positions_html if positions_html else '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
+                {positions_html if positions_html else '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
             </tbody>
         </table>
     </div>
 
     <div class="positions-card">
-        <div class="positions-title">Closed Trades ({len(closed_trades)}) <span class="{closed_pnl_class}" style="float:right;">Total: ${total_closed_pnl:+,.2f}</span></div>
+        <div class="positions-title">Closed Trades - Last Quarter ({len(recent_trades)}) <span class="{closed_pnl_class}" style="float:right;">Total: ${total_closed_pnl:+,.2f}</span></div>
         <table class="positions-table">
             <thead>
                 <tr>
@@ -1225,13 +1234,14 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
                     <th>Entry Price</th>
                     <th>Exit</th>
                     <th>Exit Price</th>
+                    <th>Fees</th>
                     <th>Days</th>
                     <th>P&L $</th>
                     <th>P&L %</th>
                 </tr>
             </thead>
             <tbody>
-                {closed_trades_html if closed_trades_html else '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-secondary);">No closed trades yet</td></tr>'}
+                {closed_trades_html if closed_trades_html else '<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text-secondary);">No closed trades yet</td></tr>'}
             </tbody>
         </table>
     </div>
