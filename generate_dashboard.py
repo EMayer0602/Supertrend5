@@ -1340,6 +1340,11 @@ def main():
     # Process trades
     flex_open_positions, flex_closed_trades = process_trades_to_positions(flex_trades)
 
+    # Debug: show first closed trade data
+    if flex_closed_trades:
+        t = flex_closed_trades[0]
+        logger.info(f"First closed trade: {t.get('symbol')} entry_date={t.get('entry_date')} entry_time={t.get('entry_time')} exit_date={t.get('exit_date')} exit_time={t.get('exit_time')}")
+
     # Connect to TWS for current prices
     print(f"\nConnecting to TWS on port {port}...")
     ib = connect_to_ib(port)
