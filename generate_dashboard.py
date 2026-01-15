@@ -842,11 +842,19 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             entry_date_fmt = entry_date[5:]  # MM-DD
         else:
             entry_date_fmt = entry_date
-        # Add time if available
-        if entry_time and len(entry_time) >= 5:
-            entry_datetime = f"{entry_date_fmt} {entry_time[:5]}"
-        elif entry_time and len(entry_time) >= 4:
-            entry_datetime = f"{entry_date_fmt} {entry_time[:2]}:{entry_time[2:4]}"
+        # Add time if available (format: HHmmss or HH:mm:ss)
+        if entry_time:
+            if ':' in entry_time:
+                # Already formatted HH:mm:ss
+                entry_datetime = f"{entry_date_fmt} {entry_time[:5]}"
+            elif len(entry_time) >= 6:
+                # HHmmss format -> HH:mm
+                entry_datetime = f"{entry_date_fmt} {entry_time[:2]}:{entry_time[2:4]}"
+            elif len(entry_time) >= 4:
+                # HHmm format -> HH:mm
+                entry_datetime = f"{entry_date_fmt} {entry_time[:2]}:{entry_time[2:4]}"
+            else:
+                entry_datetime = entry_date_fmt
         else:
             entry_datetime = entry_date_fmt
 
@@ -861,11 +869,19 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             exit_date_fmt = exit_date[5:]  # MM-DD
         else:
             exit_date_fmt = exit_date
-        # Add time if available
-        if exit_time and len(exit_time) >= 5:
-            exit_datetime = f"{exit_date_fmt} {exit_time[:5]}"
-        elif exit_time and len(exit_time) >= 4:
-            exit_datetime = f"{exit_date_fmt} {exit_time[:2]}:{exit_time[2:4]}"
+        # Add time if available (format: HHmmss or HH:mm:ss)
+        if exit_time:
+            if ':' in exit_time:
+                # Already formatted HH:mm:ss
+                exit_datetime = f"{exit_date_fmt} {exit_time[:5]}"
+            elif len(exit_time) >= 6:
+                # HHmmss format -> HH:mm
+                exit_datetime = f"{exit_date_fmt} {exit_time[:2]}:{exit_time[2:4]}"
+            elif len(exit_time) >= 4:
+                # HHmm format -> HH:mm
+                exit_datetime = f"{exit_date_fmt} {exit_time[:2]}:{exit_time[2:4]}"
+            else:
+                exit_datetime = exit_date_fmt
         else:
             exit_datetime = exit_date_fmt
 
