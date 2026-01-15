@@ -1084,19 +1084,19 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             </div>
             <div class="metric-row">
                 <span class="metric-label">Win Rate</span>
-                <span class="metric-value">{metrics['win_rate']}%</span>
+                <span class="metric-value {'positive' if metrics['win_rate'] >= 50 else 'negative'}">{metrics['win_rate']}%</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Profit Factor</span>
-                <span class="metric-value">{metrics['profit_factor']}</span>
+                <span class="metric-value {'positive' if metrics['profit_factor'] >= 1 else 'negative'}">{metrics['profit_factor']}</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Sharpe Ratio</span>
-                <span class="metric-value">{metrics['sharpe_ratio']}</span>
+                <span class="metric-value {'positive' if metrics['sharpe_ratio'] >= 0 else 'negative'}">{metrics['sharpe_ratio']}</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Max Drawdown</span>
-                <span class="metric-value">${metrics['max_drawdown']:,.2f} ({metrics['max_drawdown_pct']}%)</span>
+                <span class="metric-value negative">-${metrics['max_drawdown']:,.2f} ({metrics['max_drawdown_pct']}%)</span>
             </div>
             <div class="metric-row">
                 <span class="metric-label">Total Trades</span>
@@ -1112,7 +1112,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             </div>
             <div class="metric-row">
                 <span class="metric-label">Expectancy</span>
-                <span class="metric-value">${metrics['expectancy']:,.2f}</span>
+                <span class="metric-value {'positive' if metrics['expectancy'] >= 0 else 'negative'}">${metrics['expectancy']:+,.2f}</span>
             </div>
         </div>
     </div>
