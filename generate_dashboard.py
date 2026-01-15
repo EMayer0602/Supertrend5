@@ -1422,6 +1422,16 @@ def main():
         }
 
     # Use FlexQuery data if available, otherwise TWS data
+    # Merge FlexQuery entry data into TWS positions
+    if flex_open_positions and data.get('positions'):
+        flex_by_symbol = {p['symbol']: p for p in flex_open_positions}
+        for pos in data['positions']:
+            if pos['symbol'] in flex_by_symbol:
+                flex_pos = flex_by_symbol[pos['symbol']]
+                pos['entry_date'] = flex_pos.get('entry_date', '')
+                pos['entry_time'] = flex_pos.get('entry_time', '')
+                pos['entry_fee'] = flex_pos.get('entry_fee', 0)
+
     positions = data.get('positions', []) if data.get('positions') else flex_open_positions
     closed_trades = flex_closed_trades if flex_closed_trades else history.get('trades', [])
 
