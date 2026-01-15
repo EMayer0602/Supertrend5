@@ -325,6 +325,11 @@ def parse_flexquery_trades(xml_text: str) -> List[Dict]:
         # Sort by datetime
         trades.sort(key=lambda x: x.get('datetime', ''))
 
+        # Debug: show first trade to verify data
+        if trades:
+            first = trades[0]
+            logger.info(f"Sample trade: {first['symbol']} date={first['trade_date']} time={first['trade_time']}")
+
     except ET.ParseError as e:
         logger.error(f"XML parse error: {e}")
 
@@ -818,22 +823,40 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         # Entry date/time formatting
         entry_date = trade.get('entry_date', 'N/A')
         entry_time = trade.get('entry_time', '')
-        if len(entry_date) == 8:
-            entry_date = f"{entry_date[4:6]}-{entry_date[6:8]}"
-        if entry_time and len(entry_time) >= 5:
-            entry_datetime = f"{entry_date} {entry_time[:5]}"
+        # Handle YYYYMMDD format
+        if len(entry_date) == 8 and entry_date.isdigit():
+            entry_date_fmt = f"{entry_date[4:6]}-{entry_date[6:8]}"
+        # Handle YYYY-MM-DD format
+        elif len(entry_date) == 10 and '-' in entry_date:
+            entry_date_fmt = entry_date[5:]  # MM-DD
         else:
-            entry_datetime = entry_date
+            entry_date_fmt = entry_date
+        # Add time if available
+        if entry_time and len(entry_time) >= 5:
+            entry_datetime = f"{entry_date_fmt} {entry_time[:5]}"
+        elif entry_time and len(entry_time) >= 4:
+            entry_datetime = f"{entry_date_fmt} {entry_time[:2]}:{entry_time[2:4]}"
+        else:
+            entry_datetime = entry_date_fmt
 
         # Exit date/time formatting
         exit_date = trade.get('exit_date', 'N/A')
         exit_time = trade.get('exit_time', '')
-        if len(exit_date) == 8:
-            exit_date = f"{exit_date[4:6]}-{exit_date[6:8]}"
-        if exit_time and len(exit_time) >= 5:
-            exit_datetime = f"{exit_date} {exit_time[:5]}"
+        # Handle YYYYMMDD format
+        if len(exit_date) == 8 and exit_date.isdigit():
+            exit_date_fmt = f"{exit_date[4:6]}-{exit_date[6:8]}"
+        # Handle YYYY-MM-DD format
+        elif len(exit_date) == 10 and '-' in exit_date:
+            exit_date_fmt = exit_date[5:]  # MM-DD
         else:
-            exit_datetime = exit_date
+            exit_date_fmt = exit_date
+        # Add time if available
+        if exit_time and len(exit_time) >= 5:
+            exit_datetime = f"{exit_date_fmt} {exit_time[:5]}"
+        elif exit_time and len(exit_time) >= 4:
+            exit_datetime = f"{exit_date_fmt} {exit_time[:2]}:{exit_time[2:4]}"
+        else:
+            exit_datetime = exit_date_fmt
 
         closed_trades_html += f"""
         <tr>
@@ -1058,7 +1081,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         </div>
         <div class="summary-card">
             <div class="summary-label">Realized PnL</div>
-            <div class="summary-value {realized_class}">${total_closed_pnl:+,.2f}</div>
+            <div class="summary-value {closed_pnl_class}">${total_closed_pnl:+,.2f}</div>
         </div>
         <div class="summary-card">
             <div class="summary-label">Total Return</div>
