@@ -394,6 +394,15 @@ def process_trades_to_positions(trades: List[Dict]) -> Tuple[List[Dict], List[Di
 
     logger.info(f"Consolidated {len(trades)} partial fills into {len(consolidated_trades)} trades")
 
+    # Debug: show unique side values
+    sides = set(t['side'] for t in consolidated_trades)
+    logger.info(f"Trade sides found: {sides}")
+
+    # Debug: show trades per symbol
+    from collections import Counter
+    symbol_sides = Counter((t['symbol'], t['side']) for t in consolidated_trades)
+    logger.info(f"First 10 symbol/side combinations: {list(symbol_sides.items())[:10]}")
+
     # Step 2: Process consolidated trades into positions
     trades_by_symbol = defaultdict(list)
     for trade in consolidated_trades:
