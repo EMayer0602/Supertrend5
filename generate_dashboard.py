@@ -1424,6 +1424,12 @@ def main():
     # Process trades
     flex_open_positions, flex_closed_trades = process_trades_to_positions(flex_trades)
 
+    # Debug: show open positions from FlexQuery
+    logger.info(f"FlexQuery found {len(flex_open_positions)} open positions, {len(flex_closed_trades)} closed trades")
+    if flex_open_positions:
+        for p in flex_open_positions[:3]:
+            logger.info(f"  Open: {p['symbol']} qty={p['quantity']} entry_date={p.get('entry_date')} entry_time={p.get('entry_time')}")
+
     # Debug: show first closed trade data
     if flex_closed_trades:
         t = flex_closed_trades[0]
@@ -1470,14 +1476,19 @@ def main():
 
     # Use FlexQuery data if available, otherwise TWS data
     # Merge FlexQuery entry data into TWS positions
+    logger.info(f"TWS has {len(data.get('positions', []))} positions, FlexQuery has {len(flex_open_positions)} open positions")
     if flex_open_positions and data.get('positions'):
         flex_by_symbol = {p['symbol']: p for p in flex_open_positions}
+        logger.info(f"FlexQuery symbols: {list(flex_by_symbol.keys())[:5]}...")
+        matched = 0
         for pos in data['positions']:
             if pos['symbol'] in flex_by_symbol:
                 flex_pos = flex_by_symbol[pos['symbol']]
                 pos['entry_date'] = flex_pos.get('entry_date', '')
                 pos['entry_time'] = flex_pos.get('entry_time', '')
                 pos['entry_fee'] = flex_pos.get('entry_fee', 0)
+                matched += 1
+        logger.info(f"Matched {matched} positions with FlexQuery entry data")
 
     positions = data.get('positions', []) if data.get('positions') else flex_open_positions
     closed_trades = flex_closed_trades if flex_closed_trades else history.get('trades', [])
