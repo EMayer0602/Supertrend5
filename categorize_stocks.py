@@ -2,13 +2,15 @@
 """
 Stock Strategy Categorizer
 ===========================
-Tests EVERY stock with EVERY strategy (SUPERTREND, BUY_HOLD, TREND_FOLLOW)
-and assigns each stock to its BEST performing strategy.
+Tests EVERY stock with 6 strategies:
+- SUPERTREND: Supertrend indicator
+- KAMA: Kaufman Adaptive Moving Average crossover
+- JMA: Jurik Moving Average crossover
+- TREND_FOLLOW: EMA 18/55 crossover
+- SMA: Simple Moving Average crossover
+- EMA: EMA 12/26 crossover
 
-Output:
-- Performance comparison for each stock
-- Optimal strategy assignment
-- Updated stock_categories.json
+Assigns each stock to its BEST performing strategy.
 """
 
 import pandas as pd
@@ -37,14 +39,33 @@ STRATEGY_SETTINGS = {
         'st_multiplier': 2.0,
         'trailing_stop_pct': 0.12
     },
-    'BUY_HOLD': {
-        'trailing_stop_pct': 0.20,
-        'reentry_after_days': 5
+    'KAMA': {
+        'kama_period': 10,
+        'kama_fast': 2,
+        'kama_slow': 30,
+        'signal_period': 10,
+        'trailing_stop_pct': 0.12
+    },
+    'JMA': {
+        'jma_period': 7,
+        'jma_phase': 50,
+        'signal_period': 21,
+        'trailing_stop_pct': 0.12
     },
     'TREND_FOLLOW': {
         'ema_fast': 18,
         'ema_slow': 55,
         'trailing_stop_pct': 0.10
+    },
+    'SMA': {
+        'sma_fast': 20,
+        'sma_slow': 50,
+        'trailing_stop_pct': 0.12
+    },
+    'EMA': {
+        'ema_fast': 12,
+        'ema_slow': 26,
+        'trailing_stop_pct': 0.12
     }
 }
 
@@ -144,6 +165,91 @@ def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
     return ema
 
 
+def calculate_sma(prices: np.ndarray, period: int) -> np.ndarray:
+    """Calculate Simple Moving Average"""
+    n = len(prices)
+    sma = np.zeros(n)
+
+    if n < period:
+        sma[:] = np.nan
+        return sma
+
+    sma[:period-1] = np.nan
+    for i in range(period-1, n):
+        sma[i] = np.mean(prices[i-period+1:i+1])
+
+    return sma
+
+
+def calculate_kama(prices: np.ndarray, period: int = 10, fast: int = 2, slow: int = 30) -> np.ndarray:
+    """Calculate Kaufman Adaptive Moving Average (KAMA)"""
+    n = len(prices)
+    kama = np.zeros(n)
+
+    if n < period + 1:
+        kama[:] = np.nan
+        return kama
+
+    kama[:period] = np.nan
+
+    # Smoothing constants
+    fast_sc = 2 / (fast + 1)
+    slow_sc = 2 / (slow + 1)
+
+    # Initialize KAMA
+    kama[period] = prices[period]
+
+    for i in range(period + 1, n):
+        # Efficiency Ratio (ER)
+        change = abs(prices[i] - prices[i - period])
+        volatility = sum(abs(prices[j] - prices[j-1]) for j in range(i - period + 1, i + 1))
+
+        if volatility != 0:
+            er = change / volatility
+        else:
+            er = 0
+
+        # Smoothing Constant (SC)
+        sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+
+        # KAMA
+        kama[i] = kama[i-1] + sc * (prices[i] - kama[i-1])
+
+    return kama
+
+
+def calculate_jma(prices: np.ndarray, period: int = 7, phase: int = 50) -> np.ndarray:
+    """Calculate Jurik Moving Average (JMA) - simplified approximation"""
+    n = len(prices)
+    jma = np.zeros(n)
+
+    if n < period:
+        jma[:] = np.nan
+        return jma
+
+    # Phase adjustment (-100 to +100)
+    phase_ratio = phase / 100.0
+    beta = 0.45 * (period - 1) / (0.45 * (period - 1) + 2)
+
+    # Initialize
+    jma[:period] = np.nan
+    e0 = prices[period-1]
+    e1 = 0
+    e2 = 0
+
+    for i in range(period, n):
+        price = prices[i]
+
+        # JMA calculation with phase
+        e0 = (1 - beta) * price + beta * e0
+        e1 = (price - e0) * (1 - beta) + beta * e1
+        e2 = (e0 + phase_ratio * e1 - jma[i-1]) * (1 - beta) ** 2 + beta ** 2 * e2
+
+        jma[i] = jma[i-1] + e2 if i > period else e0 + phase_ratio * e1
+
+    return jma
+
+
 # =============================================================================
 # STRATEGY SIGNALS
 # =============================================================================
@@ -173,13 +279,55 @@ def get_supertrend_signal(df: pd.DataFrame, settings: dict) -> str:
         return "SELL"  # Downtrend - stay out
 
 
-def get_buyhold_signal(df: pd.DataFrame, settings: dict) -> str:
-    """Buy and Hold - always BUY (trailing stop managed separately)"""
-    return "BUY"
+def get_kama_signal(df: pd.DataFrame, settings: dict) -> str:
+    """KAMA crossover signal - KAMA vs Signal line"""
+    if len(df) < 60:
+        return "HOLD"
+
+    period = settings.get('kama_period', 10)
+    fast = settings.get('kama_fast', 2)
+    slow = settings.get('kama_slow', 30)
+    signal_period = settings.get('signal_period', 10)
+
+    close = df['close'].values
+    kama = calculate_kama(close, period, fast, slow)
+    signal = calculate_sma(kama, signal_period)
+
+    if np.isnan(kama[-1]) or np.isnan(signal[-1]):
+        return "HOLD"
+
+    # KAMA above signal = bullish
+    if kama[-1] > signal[-1]:
+        return "BUY"
+    else:
+        return "SELL"
+
+
+def get_jma_signal(df: pd.DataFrame, settings: dict) -> str:
+    """JMA crossover signal - JMA vs Signal line"""
+    if len(df) < 60:
+        return "HOLD"
+
+    period = settings.get('jma_period', 7)
+    phase = settings.get('jma_phase', 50)
+    signal_period = settings.get('signal_period', 21)
+
+    close = df['close'].values
+    jma = calculate_jma(close, period, phase)
+    signal = calculate_sma(jma, signal_period)
+
+    if np.isnan(jma[-1]) or np.isnan(signal[-1]):
+        return "HOLD"
+
+    # JMA above signal = bullish
+    if jma[-1] > signal[-1]:
+        return "BUY"
+    else:
+        return "SELL"
 
 
 def get_trendfollow_signal(df: pd.DataFrame, settings: dict) -> str:
-    """EMA crossover signal"""
+    """EMA 18/55 crossover signal"""
     if len(df) < 60:
         return "HOLD"
 
@@ -199,21 +347,95 @@ def get_trendfollow_signal(df: pd.DataFrame, settings: dict) -> str:
         return "SELL"
 
 
-def get_signal(df: pd.DataFrame, strategy: str, settings: dict) -> str:
-    """Get signal for a specific strategy"""
-    if strategy == 'SUPERTREND':
-        return get_supertrend_signal(df, settings)
-    elif strategy == 'BUY_HOLD':
-        return get_buyhold_signal(df, settings)
-    elif strategy == 'TREND_FOLLOW':
-        return get_trendfollow_signal(df, settings)
-    return "HOLD"
+def get_sma_signal(df: pd.DataFrame, settings: dict) -> str:
+    """SMA crossover signal"""
+    if len(df) < 60:
+        return "HOLD"
+
+    sma_fast = settings.get('sma_fast', 20)
+    sma_slow = settings.get('sma_slow', 50)
+
+    close = df['close'].values
+    fast = calculate_sma(close, sma_fast)
+    slow = calculate_sma(close, sma_slow)
+
+    if np.isnan(fast[-1]) or np.isnan(slow[-1]):
+        return "HOLD"
+
+    if fast[-1] > slow[-1]:
+        return "BUY"
+    else:
+        return "SELL"
+
+
+def get_ema_signal(df: pd.DataFrame, settings: dict) -> str:
+    """EMA 12/26 crossover signal"""
+    if len(df) < 60:
+        return "HOLD"
+
+    ema_fast = settings.get('ema_fast', 12)
+    ema_slow = settings.get('ema_slow', 26)
+
+    close = df['close'].values
+    fast = calculate_ema(close, ema_fast)
+    slow = calculate_ema(close, ema_slow)
+
+    if np.isnan(fast[-1]) or np.isnan(slow[-1]):
+        return "HOLD"
+
+    if fast[-1] > slow[-1]:
+        return "BUY"
+    else:
+        return "SELL"
+
+
+def check_htf_filter(df: pd.DataFrame, period: int = 200) -> bool:
+    """HTF Filter: Price above 200 SMA = bullish trend"""
+    if len(df) < period:
+        return True  # Not enough data, allow trades
+
+    close = df['close'].values
+    sma200 = calculate_sma(close, period)
+
+    if np.isnan(sma200[-1]):
+        return True
+
+    # Price above SMA200 = bullish, allow buys
+    return close[-1] > sma200[-1]
+
+
+def get_signal(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = False) -> str:
+    """Get signal for a specific strategy, optionally with HTF filter"""
+    # Get base signal
+    base_strategy = strategy.replace('_HTF', '')
+
+    if base_strategy == 'SUPERTREND':
+        signal = get_supertrend_signal(df, settings)
+    elif base_strategy == 'KAMA':
+        signal = get_kama_signal(df, settings)
+    elif base_strategy == 'JMA':
+        signal = get_jma_signal(df, settings)
+    elif base_strategy == 'TREND_FOLLOW':
+        signal = get_trendfollow_signal(df, settings)
+    elif base_strategy == 'SMA':
+        signal = get_sma_signal(df, settings)
+    elif base_strategy == 'EMA':
+        signal = get_ema_signal(df, settings)
+    else:
+        signal = "HOLD"
+
+    # Apply HTF filter if enabled
+    if use_htf and signal == "BUY":
+        if not check_htf_filter(df):
+            return "HOLD"  # Block buy if below 200 SMA
+
+    return signal
 
 
 # =============================================================================
 # BACKTESTER
 # =============================================================================
-def backtest_stock_strategy(df: pd.DataFrame, strategy: str, settings: dict) -> dict:
+def backtest_stock_strategy(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = False) -> dict:
     """Backtest a single stock with a single strategy"""
     capital = INITIAL_CAPITAL
     position = 0
@@ -263,8 +485,8 @@ def backtest_stock_strategy(df: pd.DataFrame, strategy: str, settings: dict) -> 
             if reentry_cooldown > 0:
                 reentry_cooldown -= 1
 
-        # Get signal
-        signal = get_signal(df_slice, strategy, settings)
+        # Get signal (with optional HTF filter)
+        signal = get_signal(df_slice, strategy, settings, use_htf)
 
         # Execute trades
         if signal == "BUY" and position == 0 and reentry_cooldown == 0:
@@ -466,10 +688,10 @@ def generate_synthetic_data(symbols: List[str], days: int = 400) -> Dict[str, pd
 # MAIN
 # =============================================================================
 def main():
-    print("="*80)
-    print("         STOCK STRATEGY CATEGORIZER")
-    print("         Test all stocks with all strategies")
-    print("="*80)
+    print("="*100)
+    print("         STOCK STRATEGY CATEGORIZER - 6 Strategies + HTF Filter")
+    print("         Tests: SUPERTREND, KAMA, JMA, TREND_FOLLOW, SMA, EMA (each with/without HTF)")
+    print("="*100)
 
     # Get all tickers
     tickers = get_all_tickers()
@@ -483,9 +705,9 @@ def main():
     print(f"German stocks: {len(german_stocks)}")
 
     # Fetch data
-    print("\n" + "-"*80)
+    print("\n" + "-"*100)
     print("  FETCHING DATA...")
-    print("-"*80)
+    print("-"*100)
 
     data = fetch_data_ib(us_stocks)
 
@@ -495,13 +717,19 @@ def main():
 
     print(f"\n  Loaded data for {len(data)} symbols")
 
+    # Define all strategy combinations (6 base + 6 with HTF = 12 total)
+    base_strategies = ['SUPERTREND', 'KAMA', 'JMA', 'TREND_FOLLOW', 'SMA', 'EMA']
+    all_strategies = []
+    for strat in base_strategies:
+        all_strategies.append((strat, False))  # Without HTF
+        all_strategies.append((strat + '_HTF', True))  # With HTF filter
+
     # Test each stock with each strategy
-    print("\n" + "-"*80)
-    print("  TESTING STRATEGIES...")
-    print("-"*80)
+    print("\n" + "-"*100)
+    print("  TESTING 12 STRATEGY COMBINATIONS...")
+    print("-"*100)
 
     results = {}
-    strategies = ['SUPERTREND', 'BUY_HOLD', 'TREND_FOLLOW']
 
     for symbol in data.keys():
         df = data[symbol]
@@ -509,111 +737,168 @@ def main():
             continue
 
         results[symbol] = {}
-        for strat in strategies:
-            settings = STRATEGY_SETTINGS[strat]
-            result = backtest_stock_strategy(df, strat, settings)
-            results[symbol][strat] = result
 
-        # Find best strategy
-        best_strat = max(strategies, key=lambda s: results[symbol][s]['total_return_pct'])
+        for strat_name, use_htf in all_strategies:
+            base_strat = strat_name.replace('_HTF', '')
+            settings = STRATEGY_SETTINGS.get(base_strat, STRATEGY_SETTINGS['SUPERTREND'])
+            result = backtest_stock_strategy(df, base_strat, settings, use_htf)
+            result['strategy'] = strat_name
+            results[symbol][strat_name] = result
+
+        # Find best strategy by final equity
+        best_strat = max([s[0] for s in all_strategies],
+                        key=lambda s: results[symbol][s]['final_equity'])
         results[symbol]['best'] = best_strat
+        results[symbol]['best_return'] = results[symbol][best_strat]['total_return_pct']
 
-        # Print progress
-        st_ret = results[symbol]['SUPERTREND']['total_return_pct']
-        bh_ret = results[symbol]['BUY_HOLD']['total_return_pct']
-        tf_ret = results[symbol]['TREND_FOLLOW']['total_return_pct']
+        # Print progress (compact format)
+        best_ret = results[symbol][best_strat]['total_return_pct']
+        print(f"  {symbol:<8} Best: {best_strat:<15} Return: {best_ret:>+7.1f}%")
 
-        print(f"  {symbol:<8} ST:{st_ret:>+7.1f}%  BH:{bh_ret:>+7.1f}%  TF:{tf_ret:>+7.1f}%  -> {best_strat}")
+    # Categorize stocks by best strategy
+    print("\n" + "="*100)
+    print("  OPTIMAL STRATEGY ASSIGNMENT (by Final Equity)")
+    print("="*100)
 
-    # Categorize stocks
-    print("\n" + "="*80)
-    print("  OPTIMAL STRATEGY ASSIGNMENT")
-    print("="*80)
-
-    categorized = {
-        'SUPERTREND': [],
-        'BUY_HOLD': [],
-        'TREND_FOLLOW': [],
-        'GERMAN': german_stocks.copy()
-    }
+    categorized = {}
+    for strat_name, _ in all_strategies:
+        categorized[strat_name] = []
+    categorized['GERMAN'] = german_stocks.copy()
 
     for symbol, res in results.items():
         best = res['best']
         categorized[best].append(symbol)
 
-    # Print summary
-    for strat, tickers in categorized.items():
-        print(f"\n  {strat} ({len(tickers)} stocks):")
-        for i in range(0, len(tickers), 10):
-            chunk = tickers[i:i+10]
-            print(f"    {', '.join(chunk)}")
+    # Print summary by strategy
+    for strat_name in sorted(categorized.keys()):
+        tickers_list = categorized[strat_name]
+        if tickers_list:
+            print(f"\n  {strat_name} ({len(tickers_list)} stocks):")
+            for i in range(0, len(tickers_list), 8):
+                chunk = tickers_list[i:i+8]
+                print(f"    {', '.join(chunk)}")
 
-    # Show detailed comparison
-    print("\n" + "="*80)
-    print("  DETAILED PERFORMANCE COMPARISON")
-    print("="*80)
-    print(f"\n  {'Symbol':<8} {'Best':<12} {'ST Return':>12} {'BH Return':>12} {'TF Return':>12} {'Diff':>10}")
-    print(f"  {'-'*8} {'-'*12} {'-'*12} {'-'*12} {'-'*12} {'-'*10}")
+    # Show detailed comparison table
+    print("\n" + "="*100)
+    print("  DETAILED PERFORMANCE COMPARISON (all 12 strategies)")
+    print("="*100)
 
-    # Sort by difference between best and worst
+    # Header
+    header = f"  {'Symbol':<8} {'BEST':<15}"
+    for strat in base_strategies:
+        header += f" {strat[:6]:>8}"
+    header += "  HTF+"
+    for strat in base_strategies:
+        header += f" {strat[:6]:>8}"
+    print(header)
+    print("  " + "-"*96)
+
+    # Sort by best return
     sorted_results = sorted(results.items(),
-                           key=lambda x: max(x[1][s]['total_return_pct'] for s in strategies) -
-                                        min(x[1][s]['total_return_pct'] for s in strategies),
+                           key=lambda x: x[1]['best_return'],
                            reverse=True)
 
     for symbol, res in sorted_results:
-        st = res['SUPERTREND']['total_return_pct']
-        bh = res['BUY_HOLD']['total_return_pct']
-        tf = res['TREND_FOLLOW']['total_return_pct']
-        best = res['best']
-        diff = max(st, bh, tf) - min(st, bh, tf)
-        print(f"  {symbol:<8} {best:<12} {st:>+11.1f}% {bh:>+11.1f}% {tf:>+11.1f}% {diff:>+9.1f}%")
+        line = f"  {symbol:<8} {res['best']:<15}"
+        # Without HTF
+        for strat in base_strategies:
+            ret = res[strat]['total_return_pct']
+            line += f" {ret:>+7.1f}%"
+        line += "  |"
+        # With HTF
+        for strat in base_strategies:
+            ret = res[strat + '_HTF']['total_return_pct']
+            line += f" {ret:>+7.1f}%"
+        print(line)
 
-    # Update config file
-    print("\n" + "-"*80)
+    # Strategy performance summary
+    print("\n" + "="*100)
+    print("  STRATEGY PERFORMANCE SUMMARY")
+    print("="*100)
+    print(f"\n  {'Strategy':<20} {'Avg Return':>12} {'Stocks':>10} {'Best For':>10}")
+    print(f"  {'-'*20} {'-'*12} {'-'*10} {'-'*10}")
+
+    for strat_name, _ in all_strategies:
+        returns = [results[s][strat_name]['total_return_pct'] for s in results]
+        avg_ret = np.mean(returns) if returns else 0
+        count = len(categorized.get(strat_name, []))
+        print(f"  {strat_name:<20} {avg_ret:>+11.1f}% {count:>10} {count:>10}")
+
+    # Update config file with simplified categories
+    print("\n" + "-"*100)
     print("  UPDATING stock_categories.json...")
-    print("-"*80)
+    print("-"*100)
 
     with open(CATEGORIES_FILE, 'r') as f:
         config = json.load(f)
 
-    # Update tickers in each strategy
-    config['strategies']['SUPERTREND']['tickers'] = sorted(categorized['SUPERTREND'])
-    config['strategies']['BUY_HOLD']['tickers'] = sorted(categorized['BUY_HOLD'])
-    config['strategies']['TREND_FOLLOW']['tickers'] = sorted(categorized['TREND_FOLLOW'])
-    config['strategies']['GERMAN']['tickers'] = sorted(categorized['GERMAN'])
+    # Create new strategy entries for all 12 strategies
+    new_strategies = {}
+
+    for strat_name, use_htf in all_strategies:
+        base_strat = strat_name.replace('_HTF', '')
+        base_settings = STRATEGY_SETTINGS.get(base_strat, {}).copy()
+        if use_htf:
+            base_settings['htf_filter'] = True
+            base_settings['htf_period'] = 200
+
+        new_strategies[strat_name] = {
+            'description': f"{base_strat} {'with HTF filter (200 SMA)' if use_htf else 'without HTF filter'}",
+            'settings': base_settings,
+            'tickers': sorted(categorized.get(strat_name, []))
+        }
+
+    # Keep GERMAN separate
+    new_strategies['GERMAN'] = {
+        'description': 'German stocks (IBIS/EUR)',
+        'settings': STRATEGY_SETTINGS['SUPERTREND'].copy(),
+        'tickers': german_stocks
+    }
+
+    # Keep EXCLUDED
+    new_strategies['EXCLUDED'] = config.get('strategies', {}).get('EXCLUDED', {'tickers': []})
+
+    config['strategies'] = new_strategies
     config['_last_updated'] = datetime.now().strftime('%Y-%m-%d')
-    config['_comment'] = f"Auto-categorized {len(results)} stocks based on 1Y backtest"
+    config['_comment'] = f"Auto-categorized {len(results)} stocks with 12 strategies (6 base + 6 HTF)"
 
     with open(CATEGORIES_FILE, 'w') as f:
         json.dump(config, f, indent=4)
 
     print(f"  Updated {CATEGORIES_FILE}")
-    print(f"  - SUPERTREND: {len(categorized['SUPERTREND'])} stocks")
-    print(f"  - BUY_HOLD: {len(categorized['BUY_HOLD'])} stocks")
-    print(f"  - TREND_FOLLOW: {len(categorized['TREND_FOLLOW'])} stocks")
-    print(f"  - GERMAN: {len(categorized['GERMAN'])} stocks")
 
-    # Summary stats
-    print("\n" + "="*80)
-    print("  STRATEGY SUMMARY")
-    print("="*80)
+    # Count summary
+    total_assigned = 0
+    for strat_name, _ in all_strategies:
+        count = len(categorized.get(strat_name, []))
+        if count > 0:
+            print(f"  - {strat_name}: {count} stocks")
+            total_assigned += count
+    print(f"  - GERMAN: {len(german_stocks)} stocks")
+    print(f"\n  Total: {total_assigned + len(german_stocks)} stocks categorized")
 
-    for strat in strategies:
-        strat_returns = [results[s][strat]['total_return_pct'] for s in results]
-        avg_return = np.mean(strat_returns)
-        print(f"\n  {strat}:")
-        print(f"    Avg Return across all stocks: {avg_return:+.1f}%")
-        print(f"    Stocks assigned: {len(categorized[strat])}")
+    # Export results to CSV
+    print("\n" + "-"*100)
+    print("  EXPORTING RESULTS...")
+    print("-"*100)
 
-        if categorized[strat]:
-            assigned_returns = [results[s][strat]['total_return_pct'] for s in categorized[strat] if s in results]
-            if assigned_returns:
-                print(f"    Avg Return for assigned: {np.mean(assigned_returns):+.1f}%")
+    export_data = []
+    for symbol, res in results.items():
+        row = {'Symbol': symbol, 'Best_Strategy': res['best']}
+        for strat_name, _ in all_strategies:
+            row[f'{strat_name}_Return'] = res[strat_name]['total_return_pct']
+            row[f'{strat_name}_Equity'] = res[strat_name]['final_equity']
+        export_data.append(row)
 
-    print("\n" + "="*80)
-    print("  DONE")
-    print("="*80)
+    df_export = pd.DataFrame(export_data)
+    df_export = df_export.sort_values('Best_Strategy')
+    export_file = 'strategy_comparison.csv'
+    df_export.to_csv(export_file, index=False)
+    print(f"  Results saved to: {export_file}")
+
+    print("\n" + "="*100)
+    print("  DONE - Run simulation_report.py to test the new categorization")
+    print("="*100)
 
 
 if __name__ == "__main__":
