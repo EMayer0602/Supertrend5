@@ -111,10 +111,11 @@ def generate_synthetic_data(symbols: List[str], days: int = 400) -> Dict[str, pd
     return data
 
 
-def fetch_historical_data_ib(symbols: List[str], days: int = 400) -> Dict[str, pd.DataFrame]:
+def fetch_historical_data_ib(symbols: List[str], days: int = 365) -> Dict[str, pd.DataFrame]:
     """Fetch historical data from Interactive Brokers"""
     try:
         from ib_insync import IB, Stock, util
+        from ib_paper_trader import get_ticker_contract_params
     except ImportError:
         logger.error("ib_insync not installed, using synthetic data")
         return generate_synthetic_data(symbols, days)
@@ -128,13 +129,15 @@ def fetch_historical_data_ib(symbols: List[str], days: int = 400) -> Dict[str, p
 
         for symbol in symbols:
             try:
-                contract = Stock(symbol, 'SMART', 'USD')
+                # Get correct exchange/currency from config
+                exchange, currency = get_ticker_contract_params(symbol)
+                contract = Stock(symbol, exchange, currency)
                 ib.qualifyContracts(contract)
 
                 bars = ib.reqHistoricalData(
                     contract,
                     endDateTime='',
-                    durationStr=f'{days} D',
+                    durationStr='1 Y',  # Use 1 year instead of 400 D
                     barSizeSetting='1 day',
                     whatToShow='TRADES',
                     useRTH=True

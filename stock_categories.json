@@ -54,7 +54,7 @@
     },
     "ticker_settings": {
         "TKMS": {
-            "exchange": "SMART",
+            "exchange": "IBIS",
             "currency": "EUR"
         }
     },
