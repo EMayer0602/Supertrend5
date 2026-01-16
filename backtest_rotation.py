@@ -540,8 +540,8 @@ def run_backtest(
                 engine.buy(symbol, current_prices[symbol], date_str)
 
         else:
-            # Daily rotation
-            if len(engine.positions) >= daily_rotation:
+            # Daily rotation (skip if strategy is 'none' = buy and hold)
+            if strategy != 'none' and len(engine.positions) >= daily_rotation:
                 # Get worst performers
                 if strategy == 'daily_pnl':
                     worst = engine.get_worst_positions_by_daily_pnl(prev_prices, daily_rotation)
@@ -683,54 +683,71 @@ def main():
 
     print(f"\nLoaded data for {len(data)} symbols")
 
+    # Run backtest with BUY & HOLD (no rotation)
+    print("\n" + "-"*60)
+    print("RUNNING BACKTEST: BUY & HOLD (NO ROTATION)")
+    print("-"*60)
+    engine_hold = run_backtest(data, strategy='none')
+    results_hold = print_results(engine_hold, "Buy & Hold (keine Rotation)")
+
     # Run backtest with DAILY PnL strategy
     print("\n" + "-"*60)
-    print("RUNNING BACKTEST: DAILY PNL STRATEGY")
+    print("RUNNING BACKTEST: DAILY PNL ROTATION")
     print("-"*60)
     engine_daily = run_backtest(data, strategy='daily_pnl')
-    results_daily = print_results(engine_daily, "Sell 3 Worst by DAILY PnL")
+    results_daily = print_results(engine_daily, "Rotation: 3 Worst by DAILY PnL")
 
     # Run backtest with TOTAL PnL strategy
     print("\n" + "-"*60)
-    print("RUNNING BACKTEST: TOTAL PNL STRATEGY")
+    print("RUNNING BACKTEST: TOTAL PNL ROTATION")
     print("-"*60)
     engine_total = run_backtest(data, strategy='total_pnl')
-    results_total = print_results(engine_total, "Sell 3 Worst by TOTAL PnL")
+    results_total = print_results(engine_total, "Rotation: 3 Worst by TOTAL PnL")
 
     # Comparison
     print("\n" + "="*60)
-    print("VERGLEICH")
+    print("VERGLEICH ALLER STRATEGIEN")
     print("="*60)
-    print(f"\n{'Metrik':<20} {'Daily PnL':>15} {'Total PnL':>15} {'Besser':>12}")
-    print("-"*62)
+    print(f"\n{'Metrik':<18} {'Buy&Hold':>14} {'Daily Rot':>14} {'Total Rot':>14} {'Besser':>10}")
+    print("-"*70)
 
-    if results_daily and results_total:
+    if results_hold and results_daily and results_total:
         metrics = [
             ('Total Return', 'total_return', '${:+,.0f}'),
             ('Return %', 'total_return_pct', '{:+.1f}%'),
-            ('Win Rate', 'win_rate', '{:.1f}%'),
+            ('Total Trades', 'total_trades', '{:.0f}'),
+            ('Total Fees', 'total_fees', '${:.0f}'),
             ('Max Drawdown', 'max_drawdown', '{:.1f}%'),
             ('Sharpe Ratio', 'sharpe', '{:.2f}'),
         ]
 
         for name, key, fmt in metrics:
+            h = results_hold[key]
             d = results_daily[key]
             t = results_total[key]
 
             if key == 'max_drawdown':
-                better = 'Daily' if d < t else 'Total'
+                best = min(h, d, t)
+                better = 'Hold' if h == best else ('Daily' if d == best else 'Total')
+            elif key in ['total_trades', 'total_fees']:
+                best = min(h, d, t)
+                better = 'Hold' if h == best else ('Daily' if d == best else 'Total')
             else:
-                better = 'Daily' if d > t else 'Total'
+                best = max(h, d, t)
+                better = 'Hold' if h == best else ('Daily' if d == best else 'Total')
 
-            print(f"{name:<20} {fmt.format(d):>15} {fmt.format(t):>15} {better:>12}")
+            print(f"{name:<18} {fmt.format(h):>14} {fmt.format(d):>14} {fmt.format(t):>14} {better:>10}")
 
     print("\n" + "="*60)
     print("EMPFEHLUNG:")
-    if results_daily and results_total:
-        if results_daily['total_return'] > results_total['total_return']:
-            print("  → Verwende DAILY PNL Strategie (bessere Returns)")
-        else:
-            print("  → Verwende TOTAL PNL Strategie (bessere Returns)")
+    if results_hold and results_daily and results_total:
+        returns = [
+            ('BUY & HOLD', results_hold['total_return']),
+            ('DAILY PNL ROTATION', results_daily['total_return']),
+            ('TOTAL PNL ROTATION', results_total['total_return'])
+        ]
+        best = max(returns, key=lambda x: x[1])
+        print(f"  → Verwende {best[0]} Strategie (beste Returns: ${best[1]:+,.0f})")
     print("="*60)
 
 
