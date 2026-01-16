@@ -1649,26 +1649,36 @@ def main():
     positions = data.get('positions', []) if data.get('positions') else flex_open_positions
     closed_trades = flex_closed_trades if flex_closed_trades else history.get('trades', [])
 
-    # Calculate equity curve from trades
+    # Filter everything for 2026 only
+    closed_trades_2026 = [t for t in closed_trades if t.get('entry_date', '').startswith('2026')]
+    positions_2026 = [p for p in positions if p.get('entry_date', '').startswith('2026') or not p.get('entry_date')]
+
+    logger.info(f"Filtered for 2026: {len(positions_2026)} positions, {len(closed_trades_2026)} closed trades")
+
+    # Calculate equity curve from trades (2026 only)
     print("\nCalculating equity curve...")
-    equity_curve = calculate_equity_curve(history, positions, closed_trades, config)
+    equity_curve = calculate_equity_curve(history, positions_2026, closed_trades_2026, config)
 
-    # Calculate metrics
-    metrics = calculate_performance_metrics(equity_curve, closed_trades, config)
+    # Filter equity curve to only include 2026 dates
+    equity_curve = [e for e in equity_curve if e.get('date', '').startswith('2026')]
 
-    # Update data with calculated values
+    # Calculate metrics (2026 only)
+    metrics = calculate_performance_metrics(equity_curve, closed_trades_2026, config)
+
+    # Update data with calculated values (use 2026 filtered positions)
+    data['positions'] = positions_2026
     if equity_curve:
         data['account']['NetLiquidation'] = equity_curve[-1]['value']
 
-    # Save history
+    # Save history (all data, not just 2026)
     history['trades'] = closed_trades
     history['equity'] = equity_curve
     history['open_positions'] = positions
     save_history(history)
 
-    # Generate HTML
+    # Generate HTML (2026 data only)
     print("\nGenerating dashboard...")
-    html = generate_html(data, equity_curve, closed_trades, metrics, config, auto_refresh)
+    html = generate_html(data, equity_curve, closed_trades_2026, metrics, config, auto_refresh)
 
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(html)
@@ -1679,8 +1689,8 @@ def main():
     print(f"{'='*60}")
     print(f"  Kapital:           ${metrics['current_capital']:,.2f}")
     print(f"  Total Return:      ${metrics['total_return']:+,.2f} ({metrics['total_return_pct']:+.1f}%)")
-    print(f"  Open Positions:    {len(positions)}")
-    print(f"  Closed Trades:     {len(closed_trades)}")
+    print(f"  Open Positions:    {len(positions_2026)} (2026)")
+    print(f"  Closed Trades:     {len(closed_trades_2026)} (2026)")
     print(f"  Win Rate:          {metrics['win_rate']}%")
     print(f"  Profit Factor:     {metrics['profit_factor']}")
 
