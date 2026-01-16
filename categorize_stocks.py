@@ -1,375 +1,619 @@
+#!/usr/bin/env python3
 """
-Stock Categorization Script
-============================
-Analyzes stocks and categorizes them by optimal strategy.
+Stock Strategy Categorizer
+===========================
+Tests EVERY stock with EVERY strategy (SUPERTREND, BUY_HOLD, TREND_FOLLOW)
+and assigns each stock to its BEST performing strategy.
 
-Usage:
-    python categorize_stocks.py                    # Analyze and show recommendations
-    python categorize_stocks.py --apply            # Apply recommendations to config
-    python categorize_stocks.py --add AAPL GOOGL   # Add tickers to analyze
-    python categorize_stocks.py --remove AAPL      # Remove ticker from all categories
-    python categorize_stocks.py --list             # List current categories
-    python categorize_stocks.py --move AAPL MOMENTUM  # Move ticker to category
+Output:
+- Performance comparison for each stock
+- Optimal strategy assignment
+- Updated stock_categories.json
 """
 
-import json
-import sys
-import numpy as np
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
-import warnings
-warnings.filterwarnings('ignore')
+from typing import Dict, List, Tuple
+import json
+import logging
 
-CONFIG_FILE = "stock_categories.json"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+INITIAL_CAPITAL = 10000  # Per stock test
+SIMULATION_DAYS = 252    # 1 year trading days
+FEE_PER_TRADE = 1.0
+
+CATEGORIES_FILE = "stock_categories.json"
+
+# Strategy settings
+STRATEGY_SETTINGS = {
+    'SUPERTREND': {
+        'st_period': 10,
+        'st_multiplier': 2.0,
+        'trailing_stop_pct': 0.12
+    },
+    'BUY_HOLD': {
+        'trailing_stop_pct': 0.20,
+        'reentry_after_days': 5
+    },
+    'TREND_FOLLOW': {
+        'ema_fast': 18,
+        'ema_slow': 55,
+        'trailing_stop_pct': 0.10
+    }
+}
 
 
-def load_config() -> dict:
-    """Load stock categories config"""
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"Config file {CONFIG_FILE} not found. Creating default...")
-        return create_default_config()
+def get_all_tickers() -> List[str]:
+    """Get all tickers from current config"""
+    with open(CATEGORIES_FILE, 'r') as f:
+        config = json.load(f)
+
+    all_tickers = []
+    for strat_name, strat_data in config.get('strategies', {}).items():
+        if strat_name != 'EXCLUDED':
+            all_tickers.extend(strat_data.get('tickers', []))
+
+    return list(set(all_tickers))
 
 
-def save_config(config: dict):
-    """Save stock categories config"""
-    config['_last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=4)
-    print(f"Config saved to {CONFIG_FILE}")
+def get_ticker_contract_params(symbol: str) -> Tuple[str, str]:
+    """Get exchange and currency for a ticker"""
+    with open(CATEGORIES_FILE, 'r') as f:
+        config = json.load(f)
+
+    ticker_settings = config.get('ticker_settings', {})
+    if symbol in ticker_settings:
+        return (
+            ticker_settings[symbol].get('exchange', 'SMART'),
+            ticker_settings[symbol].get('currency', 'USD')
+        )
+    return ('SMART', 'USD')
 
 
-def create_default_config() -> dict:
-    """Create default config structure"""
+# =============================================================================
+# INDICATORS
+# =============================================================================
+def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 2.0) -> Tuple[np.ndarray, np.ndarray]:
+    """Calculate Supertrend indicator"""
+    high = df['high'].values
+    low = df['low'].values
+    close = df['close'].values
+    n = len(close)
+
+    # ATR calculation
+    tr = np.zeros(n)
+    tr[0] = high[0] - low[0]
+    for i in range(1, n):
+        tr[i] = max(high[i] - low[i],
+                    abs(high[i] - close[i-1]),
+                    abs(low[i] - close[i-1]))
+
+    atr = np.zeros(n)
+    atr[:period] = np.nan
+    atr[period-1] = np.mean(tr[:period])
+    for i in range(period, n):
+        atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
+
+    # Supertrend
+    hl2 = (high + low) / 2
+    upper_band = hl2 + multiplier * atr
+    lower_band = hl2 - multiplier * atr
+
+    supertrend = np.zeros(n)
+    direction = np.ones(n)  # 1 = uptrend, -1 = downtrend
+
+    for i in range(period, n):
+        if close[i] > upper_band[i-1]:
+            direction[i] = 1
+        elif close[i] < lower_band[i-1]:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i-1]
+            if direction[i] == 1 and lower_band[i] < lower_band[i-1]:
+                lower_band[i] = lower_band[i-1]
+            if direction[i] == -1 and upper_band[i] > upper_band[i-1]:
+                upper_band[i] = upper_band[i-1]
+
+        supertrend[i] = lower_band[i] if direction[i] == 1 else upper_band[i]
+
+    return supertrend, direction
+
+
+def calculate_ema(prices: np.ndarray, period: int) -> np.ndarray:
+    """Calculate EMA"""
+    n = len(prices)
+    ema = np.zeros(n)
+
+    if n < period:
+        ema[:] = np.nan
+        return ema
+
+    ema[:period] = np.nan
+    ema[period-1] = np.mean(prices[:period])
+
+    multiplier = 2 / (period + 1)
+    for i in range(period, n):
+        ema[i] = (prices[i] * multiplier) + (ema[i-1] * (1 - multiplier))
+
+    return ema
+
+
+# =============================================================================
+# STRATEGY SIGNALS
+# =============================================================================
+def get_supertrend_signal(df: pd.DataFrame, settings: dict) -> str:
+    """Get Supertrend signal"""
+    if len(df) < 60:
+        return "HOLD"
+
+    period = settings.get('st_period', 10)
+    multiplier = settings.get('st_multiplier', 2.0)
+
+    supertrend, direction = calculate_supertrend(df, period, multiplier)
+
+    if len(direction) < 2:
+        return "HOLD"
+
+    current_dir = direction[-1]
+    prev_dir = direction[-2]
+
+    if current_dir == 1 and prev_dir == -1:
+        return "BUY"
+    elif current_dir == -1 and prev_dir == 1:
+        return "SELL"
+    elif current_dir == 1:
+        return "BUY"  # Uptrend - stay long
+    else:
+        return "SELL"  # Downtrend - stay out
+
+
+def get_buyhold_signal(df: pd.DataFrame, settings: dict) -> str:
+    """Buy and Hold - always BUY (trailing stop managed separately)"""
+    return "BUY"
+
+
+def get_trendfollow_signal(df: pd.DataFrame, settings: dict) -> str:
+    """EMA crossover signal"""
+    if len(df) < 60:
+        return "HOLD"
+
+    ema_fast = settings.get('ema_fast', 18)
+    ema_slow = settings.get('ema_slow', 55)
+
+    close = df['close'].values
+    fast = calculate_ema(close, ema_fast)
+    slow = calculate_ema(close, ema_slow)
+
+    if np.isnan(fast[-1]) or np.isnan(slow[-1]):
+        return "HOLD"
+
+    if fast[-1] > slow[-1]:
+        return "BUY"
+    else:
+        return "SELL"
+
+
+def get_signal(df: pd.DataFrame, strategy: str, settings: dict) -> str:
+    """Get signal for a specific strategy"""
+    if strategy == 'SUPERTREND':
+        return get_supertrend_signal(df, settings)
+    elif strategy == 'BUY_HOLD':
+        return get_buyhold_signal(df, settings)
+    elif strategy == 'TREND_FOLLOW':
+        return get_trendfollow_signal(df, settings)
+    return "HOLD"
+
+
+# =============================================================================
+# BACKTESTER
+# =============================================================================
+def backtest_stock_strategy(df: pd.DataFrame, strategy: str, settings: dict) -> dict:
+    """Backtest a single stock with a single strategy"""
+    capital = INITIAL_CAPITAL
+    position = 0
+    entry_price = 0
+    high_price = 0
+    trades = []
+    equity_curve = []
+
+    trailing_stop_pct = settings.get('trailing_stop_pct', 0.15)
+    reentry_cooldown = 0
+    reentry_days = settings.get('reentry_after_days', 0)
+
+    dates = df.index[-SIMULATION_DAYS:] if len(df) > SIMULATION_DAYS else df.index
+
+    for i, date in enumerate(dates):
+        idx = df.index.get_loc(date)
+        if idx < 60:
+            continue
+
+        df_slice = df.iloc[:idx+1]
+        price = df.loc[date, 'close']
+
+        # Update equity
+        if position > 0:
+            current_value = capital + position * price
+            high_price = max(high_price, price)
+
+            # Check trailing stop
+            stop_price = high_price * (1 - trailing_stop_pct)
+            if price <= stop_price:
+                # Hit trailing stop - sell
+                capital += position * price - FEE_PER_TRADE
+                pnl = (price - entry_price) * position - 2 * FEE_PER_TRADE
+                trades.append({
+                    'entry_price': entry_price,
+                    'exit_price': price,
+                    'pnl': pnl,
+                    'pnl_pct': (price / entry_price - 1) * 100,
+                    'reason': 'TRAILING_STOP'
+                })
+                position = 0
+                entry_price = 0
+                high_price = 0
+                reentry_cooldown = reentry_days
+        else:
+            current_value = capital
+            if reentry_cooldown > 0:
+                reentry_cooldown -= 1
+
+        # Get signal
+        signal = get_signal(df_slice, strategy, settings)
+
+        # Execute trades
+        if signal == "BUY" and position == 0 and reentry_cooldown == 0:
+            # Buy
+            quantity = int((capital - FEE_PER_TRADE) / price)
+            if quantity > 0:
+                position = quantity
+                entry_price = price
+                high_price = price
+                capital -= quantity * price + FEE_PER_TRADE
+
+        elif signal == "SELL" and position > 0:
+            # Sell
+            capital += position * price - FEE_PER_TRADE
+            pnl = (price - entry_price) * position - 2 * FEE_PER_TRADE
+            trades.append({
+                'entry_price': entry_price,
+                'exit_price': price,
+                'pnl': pnl,
+                'pnl_pct': (price / entry_price - 1) * 100,
+                'reason': 'SIGNAL'
+            })
+            position = 0
+            entry_price = 0
+            high_price = 0
+
+        # Record equity
+        equity = capital + position * price
+        equity_curve.append(equity)
+
+    # Close any open position at end
+    if position > 0:
+        final_price = df.iloc[-1]['close']
+        capital += position * final_price
+        pnl = (final_price - entry_price) * position - FEE_PER_TRADE
+        trades.append({
+            'entry_price': entry_price,
+            'exit_price': final_price,
+            'pnl': pnl,
+            'pnl_pct': (final_price / entry_price - 1) * 100,
+            'reason': 'END'
+        })
+
+    final_equity = capital
+
+    # Calculate stats
+    total_return = final_equity - INITIAL_CAPITAL
+    total_return_pct = (final_equity / INITIAL_CAPITAL - 1) * 100
+
+    # Max drawdown
+    max_dd = 0
+    peak = INITIAL_CAPITAL
+    for eq in equity_curve:
+        if eq > peak:
+            peak = eq
+        dd = (peak - eq) / peak
+        max_dd = max(max_dd, dd)
+
+    # Win rate
+    winners = [t for t in trades if t['pnl'] > 0]
+    win_rate = len(winners) / len(trades) * 100 if trades else 0
+
+    # Sharpe
+    if len(equity_curve) > 1:
+        returns = pd.Series(equity_curve).pct_change().dropna()
+        sharpe = np.sqrt(252) * returns.mean() / returns.std() if returns.std() > 0 else 0
+    else:
+        sharpe = 0
+
     return {
-        "_comment": "Stock categories for multi-strategy trading",
-        "_last_updated": datetime.now().strftime('%Y-%m-%d'),
-        "strategies": {
-            "SUPERTREND": {"description": "Volatile stocks", "settings": {}, "tickers": []},
-            "TREND_FOLLOW": {"description": "Stable uptrends", "settings": {}, "tickers": []},
-            "MOMENTUM": {"description": "Bull-runs", "settings": {}, "tickers": []},
-            "EXCLUDED": {"description": "Excluded stocks", "tickers": []}
-        },
-        "watchlist": {"description": "To analyze", "tickers": []}
+        'strategy': strategy,
+        'final_equity': final_equity,
+        'total_return': total_return,
+        'total_return_pct': total_return_pct,
+        'max_drawdown_pct': max_dd * 100,
+        'sharpe': sharpe,
+        'num_trades': len(trades),
+        'win_rate': win_rate
     }
 
 
-def analyze_stock(symbol: str, days: int = 365) -> Optional[Dict]:
-    """Analyze a stock and determine its characteristics"""
+# =============================================================================
+# DATA FETCHING
+# =============================================================================
+def fetch_data_ib(symbols: List[str]) -> Dict[str, pd.DataFrame]:
+    """Fetch data from Interactive Brokers"""
     try:
-        import yfinance as yf
+        from ib_insync import IB, Stock, util
+    except ImportError:
+        logger.warning("ib_insync not installed")
+        return {}
 
-        end = datetime.now()
-        start = end - timedelta(days=days)
-        df = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
+    data = {}
+    ib = IB()
 
-        if df.empty or len(df) < 50:
-            return None
+    try:
+        ib.connect('127.0.0.1', 7497, clientId=53)
+        logger.info(f"Connected to IB. Fetching {len(symbols)} symbols...")
 
-        # Handle MultiIndex columns
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] for col in df.columns]
+        for symbol in symbols:
+            try:
+                exchange, currency = get_ticker_contract_params(symbol)
+                contract = Stock(symbol, exchange, currency)
+                ib.qualifyContracts(contract)
 
-        close = df['Close'].values
-        high = df['High'].values
-        low = df['Low'].values
-        volume = df['Volume'].values
+                bars = ib.reqHistoricalData(
+                    contract,
+                    endDateTime='',
+                    durationStr='1 Y',
+                    barSizeSetting='1 day',
+                    whatToShow='TRADES',
+                    useRTH=True
+                )
 
-        # Calculate metrics
-        returns = np.diff(close) / close[:-1]
+                if bars:
+                    df = util.df(bars)
+                    df.columns = [c.lower() for c in df.columns]
+                    df.set_index('date', inplace=True)
+                    data[symbol] = df
+                    logger.info(f"  {symbol}: {len(df)} days")
 
-        # 1. Volatility (annualized)
-        volatility = np.std(returns) * np.sqrt(252)
+                ib.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"  {symbol}: {e}")
 
-        # 2. Total return
-        total_return = (close[-1] - close[0]) / close[0]
-
-        # 3. Max Drawdown
-        running_max = np.maximum.accumulate(close)
-        drawdowns = (close - running_max) / running_max
-        max_drawdown = abs(np.min(drawdowns))
-
-        # 4. Trend Strength (R² of linear regression)
-        x = np.arange(len(close))
-        z = np.polyfit(x, close, 1)
-        p = np.poly1d(z)
-        ss_res = np.sum((close - p(x)) ** 2)
-        ss_tot = np.sum((close - np.mean(close)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-
-        # 5. Trend direction
-        trend_direction = "bullish" if z[0] > 0 else "bearish"
-
-        # 6. Recent momentum (last 3 months vs previous 3 months)
-        if len(close) > 126:
-            recent_return = (close[-1] - close[-63]) / close[-63]
-            prev_return = (close[-63] - close[-126]) / close[-126]
-            momentum_acceleration = recent_return - prev_return
-        else:
-            recent_return = total_return
-            momentum_acceleration = 0
-
-        # 7. Average volume
-        avg_volume = np.mean(volume[-20:])
-
-        # Classify
-        if volatility > 0.40:
-            vol_class = "HIGH"
-        elif volatility > 0.25:
-            vol_class = "MEDIUM"
-        else:
-            vol_class = "LOW"
-
-        if r_squared > 0.7:
-            trend_class = "STRONG"
-        elif r_squared > 0.4:
-            trend_class = "MODERATE"
-        else:
-            trend_class = "WEAK"
-
-        # Determine recommended strategy
-        if vol_class == "LOW" and trend_class == "STRONG" and trend_direction == "bullish":
-            recommended = "TREND_FOLLOW"
-            reason = "Low volatility + strong uptrend"
-        elif total_return > 1.0 and momentum_acceleration > 0.1:
-            # More than 100% return and accelerating
-            recommended = "MOMENTUM"
-            reason = f"Strong momentum (+{total_return*100:.0f}% return, accelerating)"
-        elif vol_class in ["HIGH", "MEDIUM"] or trend_class == "WEAK":
-            recommended = "SUPERTREND"
-            reason = f"Volatile ({vol_class}) or weak trend - Supertrend optimal"
-        elif trend_direction == "bearish":
-            recommended = "EXCLUDED"
-            reason = "Bearish trend - avoid"
-        else:
-            recommended = "SUPERTREND"
-            reason = "Default - use Supertrend"
-
-        return {
-            'symbol': symbol,
-            'volatility': volatility,
-            'vol_class': vol_class,
-            'total_return': total_return,
-            'max_drawdown': max_drawdown,
-            'r_squared': r_squared,
-            'trend_class': trend_class,
-            'trend_direction': trend_direction,
-            'recent_momentum': recent_return,
-            'momentum_acceleration': momentum_acceleration,
-            'avg_volume': avg_volume,
-            'recommended': recommended,
-            'reason': reason
-        }
-
+        ib.disconnect()
     except Exception as e:
-        print(f"Error analyzing {symbol}: {e}")
-        return None
+        logger.error(f"IB connection failed: {e}")
+
+    return data
 
 
-def get_all_tickers(config: dict) -> List[str]:
-    """Get all tickers from config"""
-    tickers = set()
-    for strategy in config['strategies'].values():
-        tickers.update(strategy.get('tickers', []))
-    tickers.update(config.get('watchlist', {}).get('tickers', []))
-    return sorted(list(tickers))
+def generate_synthetic_data(symbols: List[str], days: int = 400) -> Dict[str, pd.DataFrame]:
+    """Generate synthetic data for testing"""
+    np.random.seed(42)
+    data = {}
 
+    base_prices = {
+        'NVDA': 500, 'AMD': 140, 'AVGO': 180, 'META': 520, 'TSLA': 250,
+        'COIN': 250, 'MSTR': 450, 'PLTR': 70, 'SHOP': 100, 'UBER': 75,
+        'CRWD': 350, 'MU': 100, 'JPM': 200, 'INOD': 180, 'QUBT': 15,
+        'DRH': 10, 'MRNA': 50, 'MRK': 100, 'NFLX': 900, 'NKE': 75,
+        'PFE': 25, 'PYPL': 85, 'PDYN': 40, 'QBTS': 8, 'TKMS': 30,
+        'JNJ': 150, 'TGT': 130, 'UNH': 550, 'SPY': 580, 'QQQ': 500,
+        'GOOGL': 175, 'AAPL': 190, 'AMZN': 185, 'MSFT': 420, 'CRM': 280,
+        'ORCL': 130, 'NOW': 780, 'ADBE': 550, 'PANW': 320, 'SNOW': 180,
+        'V': 280, 'MA': 480, 'LLY': 780, 'BABA': 85,
+        'SMCI': 600, 'ARM': 140, 'RIVN': 15, 'LCID': 3, 'NIO': 5,
+        'SOFI': 10, 'HOOD': 20, 'AFRM': 45, 'UPST': 35, 'DKNG': 40,
+        'IWM': 210, 'DIA': 390, 'XLF': 42, 'XLK': 210, 'VTI': 270, 'VOO': 530
+    }
 
-def find_ticker_category(config: dict, ticker: str) -> Optional[str]:
-    """Find which category a ticker is in"""
-    for cat_name, cat_data in config['strategies'].items():
-        if ticker in cat_data.get('tickers', []):
-            return cat_name
-    if ticker in config.get('watchlist', {}).get('tickers', []):
-        return 'WATCHLIST'
-    return None
+    # Different behavior types for stocks
+    # Trending stocks benefit from BUY_HOLD
+    trending = ['NVDA', 'AVGO', 'META', 'PLTR', 'CRWD', 'GOOGL', 'AAPL', 'MSFT', 'LLY', 'NOW']
+    # Volatile/sideways stocks benefit from SUPERTREND
+    volatile = ['COIN', 'MSTR', 'QUBT', 'QBTS', 'MRNA', 'RIVN', 'LCID', 'NIO', 'UPST', 'AFRM']
+    # ETFs and stable stocks benefit from TREND_FOLLOW
+    stable = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'XLF', 'XLK', 'JPM', 'JNJ']
 
+    end_date = datetime.now()
+    dates = pd.date_range(end=end_date, periods=days, freq='B')
 
-def remove_ticker_from_all(config: dict, ticker: str):
-    """Remove ticker from all categories"""
-    for cat_data in config['strategies'].values():
-        if ticker in cat_data.get('tickers', []):
-            cat_data['tickers'].remove(ticker)
-    if ticker in config.get('watchlist', {}).get('tickers', []):
-        config['watchlist']['tickers'].remove(ticker)
+    for symbol in symbols:
+        start_price = base_prices.get(symbol, 100)
 
-
-def add_ticker_to_category(config: dict, ticker: str, category: str):
-    """Add ticker to a category"""
-    remove_ticker_from_all(config, ticker)
-
-    if category.upper() == 'WATCHLIST':
-        if 'watchlist' not in config:
-            config['watchlist'] = {'tickers': []}
-        config['watchlist']['tickers'].append(ticker)
-    elif category.upper() in config['strategies']:
-        config['strategies'][category.upper()]['tickers'].append(ticker)
-    else:
-        print(f"Unknown category: {category}")
-
-
-def list_categories(config: dict):
-    """List all categories and their tickers"""
-    print("\n" + "="*80)
-    print("STOCK CATEGORIES")
-    print("="*80)
-
-    for cat_name, cat_data in config['strategies'].items():
-        tickers = cat_data.get('tickers', [])
-        desc = cat_data.get('description', '')
-        print(f"\n{cat_name} ({len(tickers)} stocks) - {desc}")
-        print("-"*60)
-        if tickers:
-            # Print in rows of 10
-            for i in range(0, len(tickers), 10):
-                print("  " + ", ".join(tickers[i:i+10]))
+        # Set volatility and drift based on stock type
+        if symbol in trending:
+            vol = 0.025
+            drift = 0.0008  # Strong uptrend
+        elif symbol in volatile:
+            vol = 0.05
+            drift = 0.0001  # Sideways with high vol
+        elif symbol in stable:
+            vol = 0.012
+            drift = 0.0004  # Moderate trend, low vol
         else:
-            print("  (empty)")
+            vol = 0.03
+            drift = 0.0004
 
-    watchlist = config.get('watchlist', {}).get('tickers', [])
-    print(f"\nWATCHLIST ({len(watchlist)} stocks)")
-    print("-"*60)
-    if watchlist:
-        print("  " + ", ".join(watchlist))
-    else:
-        print("  (empty)")
+        returns = np.random.normal(drift, vol, days)
+        prices = start_price * np.exp(np.cumsum(returns))
+
+        df = pd.DataFrame(index=dates)
+        df['close'] = prices
+        df['high'] = df['close'] * (1 + np.abs(np.random.normal(0, vol*0.5, days)))
+        df['low'] = df['close'] * (1 - np.abs(np.random.normal(0, vol*0.5, days)))
+        df['open'] = df['close'].shift(1).fillna(start_price)
+        df['high'] = df[['high', 'close', 'open']].max(axis=1)
+        df['low'] = df[['low', 'close', 'open']].min(axis=1)
+        df['volume'] = np.random.randint(1000000, 10000000, days)
+
+        data[symbol] = df
+
+    return data
 
 
-def analyze_and_recommend(config: dict, tickers: List[str] = None):
-    """Analyze tickers and show recommendations"""
-    if tickers is None:
-        tickers = get_all_tickers(config)
-
-    if not tickers:
-        print("No tickers to analyze")
-        return []
-
-    print("\n" + "="*80)
-    print("ANALYZING STOCKS FOR OPTIMAL STRATEGY")
+# =============================================================================
+# MAIN
+# =============================================================================
+def main():
+    print("="*80)
+    print("         STOCK STRATEGY CATEGORIZER")
+    print("         Test all stocks with all strategies")
     print("="*80)
 
-    results = []
-    changes = []
+    # Get all tickers
+    tickers = get_all_tickers()
+    print(f"\nTotal stocks to analyze: {len(tickers)}")
 
-    for i, symbol in enumerate(tickers, 1):
-        print(f"[{i}/{len(tickers)}] Analyzing {symbol}...", end=" ")
+    # Separate German stocks (they stay in GERMAN category)
+    german_stocks = ['TKMS']
+    us_stocks = [t for t in tickers if t not in german_stocks]
 
-        analysis = analyze_stock(symbol)
-        if analysis is None:
-            print("Error/No data")
+    print(f"US stocks: {len(us_stocks)}")
+    print(f"German stocks: {len(german_stocks)}")
+
+    # Fetch data
+    print("\n" + "-"*80)
+    print("  FETCHING DATA...")
+    print("-"*80)
+
+    data = fetch_data_ib(us_stocks)
+
+    if len(data) < 10:
+        print("  Using synthetic data (IB not available)")
+        data = generate_synthetic_data(us_stocks)
+
+    print(f"\n  Loaded data for {len(data)} symbols")
+
+    # Test each stock with each strategy
+    print("\n" + "-"*80)
+    print("  TESTING STRATEGIES...")
+    print("-"*80)
+
+    results = {}
+    strategies = ['SUPERTREND', 'BUY_HOLD', 'TREND_FOLLOW']
+
+    for symbol in data.keys():
+        df = data[symbol]
+        if len(df) < 100:
             continue
 
-        current_cat = find_ticker_category(config, symbol)
-        recommended = analysis['recommended']
+        results[symbol] = {}
+        for strat in strategies:
+            settings = STRATEGY_SETTINGS[strat]
+            result = backtest_stock_strategy(df, strat, settings)
+            results[symbol][strat] = result
 
-        if current_cat != recommended:
-            changes.append({
-                'ticker': symbol,
-                'from': current_cat,
-                'to': recommended,
-                'reason': analysis['reason']
-            })
-            print(f"-> {recommended} (was: {current_cat}) - {analysis['reason']}")
-        else:
-            print(f"OK ({recommended})")
+        # Find best strategy
+        best_strat = max(strategies, key=lambda s: results[symbol][s]['total_return_pct'])
+        results[symbol]['best'] = best_strat
 
-        results.append(analysis)
+        # Print progress
+        st_ret = results[symbol]['SUPERTREND']['total_return_pct']
+        bh_ret = results[symbol]['BUY_HOLD']['total_return_pct']
+        tf_ret = results[symbol]['TREND_FOLLOW']['total_return_pct']
 
-    # Summary
+        print(f"  {symbol:<8} ST:{st_ret:>+7.1f}%  BH:{bh_ret:>+7.1f}%  TF:{tf_ret:>+7.1f}%  -> {best_strat}")
+
+    # Categorize stocks
     print("\n" + "="*80)
-    print("SUMMARY")
+    print("  OPTIMAL STRATEGY ASSIGNMENT")
     print("="*80)
 
-    if changes:
-        print(f"\n{len(changes)} recommended changes:")
-        print("-"*60)
-        for c in changes:
-            print(f"  {c['ticker']}: {c['from'] or 'NEW'} -> {c['to']}")
-            print(f"    Reason: {c['reason']}")
-    else:
-        print("\nNo changes recommended - all tickers in optimal categories")
+    categorized = {
+        'SUPERTREND': [],
+        'BUY_HOLD': [],
+        'TREND_FOLLOW': [],
+        'GERMAN': german_stocks.copy()
+    }
 
-    # Stats by category
-    print("\n" + "-"*60)
-    print("Recommendations by category:")
-    cats = {}
-    for r in results:
-        cat = r['recommended']
-        if cat not in cats:
-            cats[cat] = []
-        cats[cat].append(r['symbol'])
+    for symbol, res in results.items():
+        best = res['best']
+        categorized[best].append(symbol)
 
-    for cat, syms in sorted(cats.items()):
-        print(f"  {cat}: {len(syms)} stocks")
-        print(f"    {', '.join(syms[:10])}" + ("..." if len(syms) > 10 else ""))
+    # Print summary
+    for strat, tickers in categorized.items():
+        print(f"\n  {strat} ({len(tickers)} stocks):")
+        for i in range(0, len(tickers), 10):
+            chunk = tickers[i:i+10]
+            print(f"    {', '.join(chunk)}")
 
-    return changes
+    # Show detailed comparison
+    print("\n" + "="*80)
+    print("  DETAILED PERFORMANCE COMPARISON")
+    print("="*80)
+    print(f"\n  {'Symbol':<8} {'Best':<12} {'ST Return':>12} {'BH Return':>12} {'TF Return':>12} {'Diff':>10}")
+    print(f"  {'-'*8} {'-'*12} {'-'*12} {'-'*12} {'-'*12} {'-'*10}")
 
+    # Sort by difference between best and worst
+    sorted_results = sorted(results.items(),
+                           key=lambda x: max(x[1][s]['total_return_pct'] for s in strategies) -
+                                        min(x[1][s]['total_return_pct'] for s in strategies),
+                           reverse=True)
 
-def apply_changes(config: dict, changes: List[dict]):
-    """Apply recommended changes to config"""
-    if not changes:
-        print("No changes to apply")
-        return
+    for symbol, res in sorted_results:
+        st = res['SUPERTREND']['total_return_pct']
+        bh = res['BUY_HOLD']['total_return_pct']
+        tf = res['TREND_FOLLOW']['total_return_pct']
+        best = res['best']
+        diff = max(st, bh, tf) - min(st, bh, tf)
+        print(f"  {symbol:<8} {best:<12} {st:>+11.1f}% {bh:>+11.1f}% {tf:>+11.1f}% {diff:>+9.1f}%")
 
-    print(f"\nApplying {len(changes)} changes...")
-    for c in changes:
-        add_ticker_to_category(config, c['ticker'], c['to'])
-        print(f"  Moved {c['ticker']} to {c['to']}")
+    # Update config file
+    print("\n" + "-"*80)
+    print("  UPDATING stock_categories.json...")
+    print("-"*80)
 
-    save_config(config)
+    with open(CATEGORIES_FILE, 'r') as f:
+        config = json.load(f)
 
+    # Update tickers in each strategy
+    config['strategies']['SUPERTREND']['tickers'] = sorted(categorized['SUPERTREND'])
+    config['strategies']['BUY_HOLD']['tickers'] = sorted(categorized['BUY_HOLD'])
+    config['strategies']['TREND_FOLLOW']['tickers'] = sorted(categorized['TREND_FOLLOW'])
+    config['strategies']['GERMAN']['tickers'] = sorted(categorized['GERMAN'])
+    config['_last_updated'] = datetime.now().strftime('%Y-%m-%d')
+    config['_comment'] = f"Auto-categorized {len(results)} stocks based on 1Y backtest"
 
-def main():
-    config = load_config()
+    with open(CATEGORIES_FILE, 'w') as f:
+        json.dump(config, f, indent=4)
 
-    args = sys.argv[1:]
+    print(f"  Updated {CATEGORIES_FILE}")
+    print(f"  - SUPERTREND: {len(categorized['SUPERTREND'])} stocks")
+    print(f"  - BUY_HOLD: {len(categorized['BUY_HOLD'])} stocks")
+    print(f"  - TREND_FOLLOW: {len(categorized['TREND_FOLLOW'])} stocks")
+    print(f"  - GERMAN: {len(categorized['GERMAN'])} stocks")
 
-    if not args:
-        # Default: analyze and show recommendations
-        changes = analyze_and_recommend(config)
-        if changes:
-            print("\nRun with --apply to apply these changes")
+    # Summary stats
+    print("\n" + "="*80)
+    print("  STRATEGY SUMMARY")
+    print("="*80)
 
-    elif args[0] == '--list':
-        list_categories(config)
+    for strat in strategies:
+        strat_returns = [results[s][strat]['total_return_pct'] for s in results]
+        avg_return = np.mean(strat_returns)
+        print(f"\n  {strat}:")
+        print(f"    Avg Return across all stocks: {avg_return:+.1f}%")
+        print(f"    Stocks assigned: {len(categorized[strat])}")
 
-    elif args[0] == '--apply':
-        changes = analyze_and_recommend(config)
-        if changes:
-            apply_changes(config, changes)
+        if categorized[strat]:
+            assigned_returns = [results[s][strat]['total_return_pct'] for s in categorized[strat] if s in results]
+            if assigned_returns:
+                print(f"    Avg Return for assigned: {np.mean(assigned_returns):+.1f}%")
 
-    elif args[0] == '--add' and len(args) > 1:
-        new_tickers = [t.upper() for t in args[1:]]
-        print(f"Adding tickers to watchlist: {new_tickers}")
-        for t in new_tickers:
-            add_ticker_to_category(config, t, 'WATCHLIST')
-        save_config(config)
-        print("\nRun 'python categorize_stocks.py' to analyze and categorize them")
-
-    elif args[0] == '--remove' and len(args) > 1:
-        tickers = [t.upper() for t in args[1:]]
-        print(f"Removing tickers: {tickers}")
-        for t in tickers:
-            remove_ticker_from_all(config, t)
-        save_config(config)
-
-    elif args[0] == '--move' and len(args) >= 3:
-        ticker = args[1].upper()
-        category = args[2].upper()
-        print(f"Moving {ticker} to {category}")
-        add_ticker_to_category(config, ticker, category)
-        save_config(config)
-
-    elif args[0] == '--analyze' and len(args) > 1:
-        tickers = [t.upper() for t in args[1:]]
-        analyze_and_recommend(config, tickers)
-
-    else:
-        print(__doc__)
+    print("\n" + "="*80)
+    print("  DONE")
+    print("="*80)
 
 
 if __name__ == "__main__":
