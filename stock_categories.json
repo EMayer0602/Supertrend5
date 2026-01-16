@@ -1,102 +1,58 @@
 {
-    "_comment": "Stock categories - Optimized by indicator backtest (SUPERTREND, KAMA, JMA)",
-    "_last_updated": "2026-01-07 16:45",
+    "_comment": "Stock categories - Strategy per stock for trading",
+    "_last_updated": "2026-01-16",
     "strategies": {
         "SUPERTREND": {
-            "description": "Stocks where Supertrend indicator beats B&H",
+            "description": "Volatile/Seitwärts-Aktien - Supertrend schlägt B&H",
             "settings": {
                 "st_period": 15,
                 "st_multiplier": 4.0,
-                "trailing_stop_pct": 0.12,
-                "stop_loss_pct": 0.36
+                "trailing_stop_pct": 0.12
             },
             "tickers": [
-                "MRK",
-                "MRNA",
-                "NFLX",
-                "NKE",
-                "PDYN",
-                "PFE",
-                "PYPL",
-                "QBTS",
-                "TKMS"
-            ]
-        },
-        "KAMA": {
-            "description": "Stocks where KAMA crossover beats B&H",
-            "settings": {
-                "kama_fast": 10,
-                "kama_slow": 30,
-                "trailing_stop_pct": 0.15,
-                "stop_loss_pct": 0.21
-            },
-            "tickers": [
-                "JNJ",
-                "TGT"
-            ]
-        },
-        "JMA": {
-            "description": "Stocks where JMA crossover beats B&H",
-            "settings": {
-                "jma_fast": 7,
-                "jma_slow": 21,
-                "trailing_stop_pct": 0.15,
-                "stop_loss_pct": 0.22
-            },
-            "tickers": [
-                "UNH"
+                "PDYN", "QBTS", "MRNA", "PYPL", "PFE",
+                "NKE", "MRK", "TGT", "UNH", "NFLX"
             ]
         },
         "BUY_HOLD": {
-            "description": "Strong uptrends - no indicator beats B&H, use 20% trailing stop",
+            "description": "Starke Bull-Runs - Immer Long, 20% Trailing + Re-Entry",
             "settings": {
                 "trailing_stop_pct": 0.20,
-                "stop_loss_pct": 0.26,
                 "reentry_after_days": 5
             },
             "tickers": [
-                "AMD",
-                "AVGO",
-                "COIN",
-                "CRWD",
-                "DRH",
-                "INOD",
-                "JPM",
-                "META",
-                "MSTR",
-                "MU",
-                "NVDA",
-                "PLTR",
-                "QUBT",
-                "SHOP",
-                "TSLA",
-                "UBER"
+                "PLTR", "NVDA", "MSTR", "QUBT", "COIN",
+                "AVGO", "MU", "META", "CRWD", "SHOP"
             ]
         },
         "TREND_FOLLOW": {
-            "description": "ETFs - KAMA crossover",
+            "description": "ETFs/Stabile Aktien - EMA 20/50 Cross",
             "settings": {
-                "kama_fast": 10,
-                "kama_slow": 30,
-                "trailing_stop_pct": 0.15,
-                "stop_loss_pct": 0.06
+                "ema_fast": 20,
+                "ema_slow": 50,
+                "trailing_stop_pct": 0.15
             },
             "tickers": [
-                "SPY",
-                "QQQ"
+                "SPY", "QQQ", "JPM", "JNJ"
+            ]
+        },
+        "GERMAN": {
+            "description": "Deutsche Aktien (IBIS/EUR) - Supertrend",
+            "settings": {
+                "st_period": 15,
+                "st_multiplier": 4.0,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": [
+                "TKMS"
             ]
         },
         "EXCLUDED": {
-            "description": "Excluded stocks (delisted, not tradeable)",
-            "tickers": [
-                "WBA",
-                "SQ",
-                "PG"
-            ]
+            "description": "Excluded stocks",
+            "tickers": []
         }
     },
     "ticker_settings": {
-        "_comment": "Per-ticker overrides for exchange and currency",
         "TKMS": {
             "exchange": "SMART",
             "currency": "EUR"
