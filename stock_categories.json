@@ -5,8 +5,8 @@
         "SUPERTREND": {
             "description": "Volatile/Seitwärts-Aktien - Supertrend schlägt B&H",
             "settings": {
-                "st_period": 15,
-                "st_multiplier": 4.0,
+                "st_period": 10,
+                "st_multiplier": 2.0,
                 "trailing_stop_pct": 0.12
             },
             "tickers": [
@@ -22,15 +22,16 @@
             },
             "tickers": [
                 "PLTR", "NVDA", "MSTR", "QUBT", "COIN",
-                "AVGO", "MU", "META", "CRWD", "SHOP"
+                "AVGO", "MU", "META", "CRWD", "SHOP",
+                "AMD", "DRH", "INOD", "TSLA", "UBER"
             ]
         },
         "TREND_FOLLOW": {
-            "description": "ETFs/Stabile Aktien - EMA 20/50 Cross",
+            "description": "ETFs/Stabile Aktien - EMA 18/55 Cross",
             "settings": {
-                "ema_fast": 20,
-                "ema_slow": 50,
-                "trailing_stop_pct": 0.15
+                "ema_fast": 18,
+                "ema_slow": 55,
+                "trailing_stop_pct": 0.10
             },
             "tickers": [
                 "SPY", "QQQ", "JPM", "JNJ"
@@ -39,8 +40,8 @@
         "GERMAN": {
             "description": "Deutsche Aktien (IBIS/EUR) - Supertrend",
             "settings": {
-                "st_period": 15,
-                "st_multiplier": 4.0,
+                "st_period": 10,
+                "st_multiplier": 2.0,
                 "trailing_stop_pct": 0.12
             },
             "tickers": [
