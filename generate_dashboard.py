@@ -1105,10 +1105,13 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         </tr>
         """
 
-    # Summary values
-    net_liq = data['account'].get('NetLiquidation', metrics['current_capital'])
+    # Summary values - use TWS values directly
+    net_liq = data['account'].get('NetLiquidation', 0)
     cash = data['account'].get('TotalCashValue', 0)
-    unrealized = data.get('total_unrealized_pnl', sum(p['unrealized_pnl'] for p in positions))
+    # Use TWS unrealized PnL (sum of all positions)
+    unrealized = data.get('total_unrealized_pnl', 0)
+    if unrealized == 0:
+        unrealized = sum(p.get('unrealized_pnl', 0) for p in data.get('positions', []))
     realized = data.get('total_realized_pnl', total_closed_pnl)
     daily = data.get('daily_pnl', 0)
     num_positions = len(positions)
@@ -1300,15 +1303,15 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
 
     <div class="summary-grid">
         <div class="summary-card highlight">
-            <div class="summary-label">Kapital</div>
-            <div class="summary-value">${metrics['current_capital']:,.2f}</div>
+            <div class="summary-label">Net Liquidity (TWS)</div>
+            <div class="summary-value">${net_liq:,.2f}</div>
         </div>
         <div class="summary-card">
-            <div class="summary-label">Daily PnL</div>
+            <div class="summary-label">Daily PnL (TWS)</div>
             <div class="summary-value {daily_class}">${daily:+,.2f}</div>
         </div>
         <div class="summary-card">
-            <div class="summary-label">Unrealized PnL</div>
+            <div class="summary-label">Unrealized (TWS)</div>
             <div class="summary-value {unrealized_class}">${unrealized:+,.2f}</div>
         </div>
         <div class="summary-card">
@@ -1665,10 +1668,17 @@ def main():
     # Calculate metrics (2026 only)
     metrics = calculate_performance_metrics(equity_curve, closed_trades_2026, config)
 
-    # Update data with calculated values (use 2026 filtered positions)
+    # Update data with 2026 filtered positions but keep TWS account values
+    tws_net_liq = data['account'].get('NetLiquidation', 0)
+    tws_unrealized = data.get('total_unrealized_pnl', 0)
+    tws_daily = data.get('daily_pnl', 0)
+
     data['positions'] = positions_2026
-    if equity_curve:
-        data['account']['NetLiquidation'] = equity_curve[-1]['value']
+
+    # Restore TWS values (don't overwrite with calculated values)
+    data['account']['NetLiquidation'] = tws_net_liq
+    data['total_unrealized_pnl'] = tws_unrealized
+    data['daily_pnl'] = tws_daily
 
     # Save history (all data, not just 2026)
     history['trades'] = closed_trades
