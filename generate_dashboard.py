@@ -697,7 +697,7 @@ def get_current_prices(ib: IB, symbols: List[str]) -> Dict[str, float]:
 
 
 def get_portfolio_from_tws(ib: IB) -> Dict:
-    """Get portfolio data directly from TWS"""
+    """Get portfolio data directly from TWS - including Daily PnL and Realized PnL per position"""
     data = {
         'account': {},
         'positions': [],
@@ -718,12 +718,18 @@ def get_portfolio_from_tws(ib: IB) -> Dict:
     data['total_unrealized_pnl'] = data['account'].get('UnrealizedPnL', 0)
     data['total_realized_pnl'] = data['account'].get('RealizedPnL', 0)
 
-    # Portfolio positions
+    # Get account for PnL requests
+    accounts = ib.managedAccounts()
+    account = accounts[0] if accounts else ''
+
+    # Portfolio positions with Daily PnL and Realized PnL
+    positions_list = []
     for item in ib.portfolio():
         if item.position == 0:
             continue
 
         symbol = item.contract.symbol
+        conId = item.contract.conId
         quantity = item.position
         avg_cost = item.averageCost
         market_value = item.marketValue
@@ -733,33 +739,78 @@ def get_portfolio_from_tws(ib: IB) -> Dict:
         cost_basis = abs(avg_cost * quantity)
         pnl_pct = (unrealized_pnl / cost_basis) * 100 if cost_basis != 0 else 0
 
-        data['positions'].append({
+        pos_data = {
             'symbol': symbol,
+            'conId': conId,
             'direction': 'LONG' if quantity > 0 else 'SHORT',
             'quantity': int(abs(quantity)),
             'entry_price': round(avg_cost, 2),
             'current_price': round(current_price, 2),
             'market_value': round(market_value, 2),
             'unrealized_pnl': round(unrealized_pnl, 2),
+            'daily_pnl': 0,  # Will be filled from reqPnLSingle
+            'realized_pnl': 0,  # Will be filled from reqPnLSingle
             'pnl_pct': round(pnl_pct, 2),
+            'change_pct': 0,  # Price change %
             'strategy': get_ticker_strategy(symbol)
-        })
+        }
+        positions_list.append(pos_data)
 
-    # Daily PnL
+    # Request PnL for each position (Daily PnL and Realized PnL)
+    if account and positions_list:
+        logger.info(f"Requesting PnL for {len(positions_list)} positions...")
+        pnl_singles = {}
+
+        for pos in positions_list:
+            try:
+                # Request PnL for this specific position
+                ib.reqPnLSingle(account, '', pos['conId'])
+            except Exception as e:
+                logger.warning(f"Could not request PnL for {pos['symbol']}: {e}")
+
+        # Wait for data
+        ib.sleep(2)
+
+        # Collect PnL data
+        for pnl in ib.pnlSingle():
+            pnl_singles[pnl.conId] = pnl
+
+        # Update positions with PnL data
+        for pos in positions_list:
+            conId = pos['conId']
+            if conId in pnl_singles:
+                pnl = pnl_singles[conId]
+                if pnl.dailyPnL and not math.isnan(pnl.dailyPnL):
+                    pos['daily_pnl'] = round(pnl.dailyPnL, 2)
+                if pnl.realizedPnL and not math.isnan(pnl.realizedPnL):
+                    pos['realized_pnl'] = round(pnl.realizedPnL, 2)
+
+        # Cancel PnL subscriptions
+        for pos in positions_list:
+            try:
+                ib.cancelPnLSingle(account, '', pos['conId'])
+            except:
+                pass
+
+    data['positions'] = positions_list
+
+    # Total Daily PnL
     try:
-        accounts = ib.managedAccounts()
-        if accounts:
-            ib.reqPnL(accounts[0], '')
-            ib.sleep(2)
+        if account:
+            ib.reqPnL(account, '')
+            ib.sleep(1)
             for pnl in ib.pnl():
                 if pnl.dailyPnL and not math.isnan(pnl.dailyPnL):
                     data['daily_pnl'] = round(pnl.dailyPnL, 2)
-                    break
-            ib.cancelPnL(accounts[0])
+                if pnl.realizedPnL and not math.isnan(pnl.realizedPnL):
+                    data['total_realized_pnl'] = round(pnl.realizedPnL, 2)
+                break
+            ib.cancelPnL(account)
     except:
         pass
 
-    data['positions'].sort(key=lambda x: x['unrealized_pnl'], reverse=True)
+    # Sort by Daily PnL (like TWS Monitor)
+    data['positions'].sort(key=lambda x: x['daily_pnl'], reverse=True)
 
     return data
 
@@ -992,43 +1043,32 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     daily_pnl_labels = json.dumps([e['date'][-5:] for e in equity_curve[-14:]])
     daily_pnl_values = json.dumps([e.get('daily_pnl', 0) for e in equity_curve[-14:]])
 
-    # Position chart data - already sorted by unrealized PnL from TWS
+    # Position chart data - sorted by Daily PnL (like TWS)
     positions = data.get('positions', [])
     pos_symbols = json.dumps([p['symbol'] for p in positions])
-    pos_pnl = json.dumps([p['unrealized_pnl'] for p in positions])
-    pos_colors = json.dumps(['#00d26a' if p['unrealized_pnl'] >= 0 else '#ff4757' for p in positions])
+    pos_daily_pnl = json.dumps([p.get('daily_pnl', 0) for p in positions])
+    pos_colors = json.dumps(['#00d26a' if p.get('daily_pnl', 0) >= 0 else '#ff4757' for p in positions])
 
-    # Positions table - same order as TWS (by unrealized PnL)
+    # Positions table - same order as TWS (by Daily PnL)
     positions_html = ""
     for pos in positions:
+        daily_class = "positive" if pos.get('daily_pnl', 0) >= 0 else "negative"
+        realized_class = "positive" if pos.get('realized_pnl', 0) >= 0 else "negative"
         pnl_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
-        # Entry date/time formatting
-        entry_date = pos.get('entry_date', '')
-        entry_time = pos.get('entry_time', '')
-        if len(entry_date) == 8 and entry_date.isdigit():
-            entry_date_fmt = f"{entry_date[:4]}-{entry_date[4:6]}-{entry_date[6:8]}"
-        elif len(entry_date) == 10 and '-' in entry_date:
-            entry_date_fmt = entry_date
-        else:
-            entry_date_fmt = entry_date or 'N/A'
-        if entry_time and len(entry_time) >= 4:
-            h = entry_time[:2]
-            m = entry_time[2:4]
-            entry_datetime = f"{entry_date_fmt} {h}:{m}"
-        else:
-            entry_datetime = entry_date_fmt
-        entry_fee = pos.get('entry_fee', 0)
+
+        # Show realized only if non-zero
+        realized_pnl = pos.get('realized_pnl', 0)
+        realized_str = f"${realized_pnl:+,.0f}" if realized_pnl != 0 else ""
+
         positions_html += f"""
         <tr>
+            <td class="{daily_class}"><strong>${pos.get('daily_pnl', 0):+,.0f}</strong></td>
             <td><strong>{pos['symbol']}</strong></td>
-            <td><span class="badge {pos['direction'].lower()}">{pos['direction']}</span></td>
             <td>{pos['quantity']}</td>
-            <td>{entry_datetime}</td>
+            <td>${pos.get('market_value', 0):,.0f}</td>
             <td>${pos['entry_price']:,.2f}</td>
             <td>${pos['current_price']:,.2f}</td>
-            <td>${entry_fee:,.2f}</td>
-            <td>${pos.get('market_value', 0):,.2f}</td>
-            <td class="{pnl_class}">${pos['unrealized_pnl']:+,.2f}</td>
+            <td class="{realized_class}">{realized_str}</td>
             <td class="{pnl_class}">{pos['pnl_pct']:+.2f}%</td>
         </tr>
         """
@@ -1396,24 +1436,22 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     </div>
 
     <div class="positions-card">
-        <div class="positions-title">Open Positions ({num_positions})</div>
+        <div class="positions-title">Open Positions ({num_positions}) - sortiert nach Daily PnL</div>
         <table class="positions-table">
             <thead>
                 <tr>
+                    <th>DLY</th>
                     <th>Symbol</th>
-                    <th>Direction</th>
-                    <th>Qty</th>
-                    <th>Entry</th>
-                    <th>Entry Price</th>
-                    <th>Current Price</th>
-                    <th>Fee</th>
-                    <th>Market Value</th>
-                    <th>Unrealized PnL</th>
-                    <th>PnL %</th>
+                    <th>POS</th>
+                    <th>MKT VAL</th>
+                    <th>AVG PX</th>
+                    <th>LAST</th>
+                    <th>RLZD</th>
+                    <th>CHNG</th>
                 </tr>
             </thead>
             <tbody>
-                {positions_html if positions_html else '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
+                {positions_html if positions_html else '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
             </tbody>
         </table>
     </div>
@@ -1507,7 +1545,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             data: {{
                 labels: {pos_symbols},
                 datasets: [{{
-                    data: {pos_pnl},
+                    data: {pos_daily_pnl},
                     backgroundColor: {pos_colors},
                     borderRadius: 4
                 }}]
