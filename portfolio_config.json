@@ -1,0 +1,39 @@
+{
+    "account": {
+        "eur_cash": 20000,
+        "usd_cash": 31228,
+        "currency": "USD"
+    },
+    "positions": [
+        {"symbol": "MU", "qty": 74, "avg_price": 89.50},
+        {"symbol": "MRNA", "qty": 733, "avg_price": 38.20},
+        {"symbol": "INOD", "qty": 393, "avg_price": 60.00},
+        {"symbol": "AVGO", "qty": 75, "avg_price": 185.00},
+        {"symbol": "MSTR", "qty": 154, "avg_price": 158.50},
+        {"symbol": "QUBT", "qty": 535, "avg_price": 8.80},
+        {"symbol": "JPM", "qty": 77, "avg_price": 195.00},
+        {"symbol": "PDYN", "qty": -1400, "avg_price": 6.80},
+        {"symbol": "NFLX", "qty": 278, "avg_price": 88.00},
+        {"symbol": "UBER", "qty": 299, "avg_price": 78.50},
+        {"symbol": "COIN", "qty": 50, "avg_price": 220.00},
+        {"symbol": "TGT", "qty": 244, "avg_price": 102.50},
+        {"symbol": "PYPL", "qty": 425, "avg_price": 62.00},
+        {"symbol": "TER", "qty": 30, "avg_price": 155.00},
+        {"symbol": "SPY", "qty": 36, "avg_price": 580.00},
+        {"symbol": "META", "qty": 38, "avg_price": 520.00},
+        {"symbol": "QQQ", "qty": 40, "avg_price": 510.00},
+        {"symbol": "CRWD", "qty": 53, "avg_price": 460.00},
+        {"symbol": "NVDA", "qty": 54, "avg_price": 135.00},
+        {"symbol": "TSLA", "qty": 57, "avg_price": 380.00},
+        {"symbol": "BA", "qty": 632, "avg_price": 240.00},
+        {"symbol": "NKE", "qty": 392, "avg_price": 66.00},
+        {"symbol": "AMD", "qty": -40, "avg_price": 125.00},
+        {"symbol": "PFE", "qty": 994, "avg_price": 26.00},
+        {"symbol": "ROKU", "qty": 229, "avg_price": 115.00},
+        {"symbol": "CRM", "qty": 50, "avg_price": 235.00},
+        {"symbol": "SHOP", "qty": 152, "avg_price": 170.00},
+        {"symbol": "MRK", "qty": 230, "avg_price": 115.00},
+        {"symbol": "DIS", "qty": 220, "avg_price": 118.00},
+        {"symbol": "DKNG", "qty": 726, "avg_price": 36.00}
+    ]
+}
