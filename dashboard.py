@@ -107,6 +107,7 @@ TWS_CSS = """
     .negative { color: #ff4444 !important; }
     .neutral { color: #ffffff !important; }
     .info-blue { color: #00bfff !important; }
+    .gray { color: #666666 !important; }
 
     /* Account Info */
     .account-row {
@@ -324,6 +325,28 @@ def load_portfolio_config():
         }
 
 
+def load_stock_categories():
+    """Load stock categories/strategies from JSON file"""
+    config_path = os.path.join(os.path.dirname(__file__), 'stock_categories.json')
+
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    return None
+
+
+def get_symbol_strategy(symbol: str, categories: dict) -> str:
+    """Get the assigned strategy for a symbol"""
+    if not categories:
+        return "N/A"
+
+    for strat_name, strat_info in categories.get('strategies', {}).items():
+        if symbol in strat_info.get('tickers', []):
+            return strat_name
+
+    return "NONE"
+
+
 @st.cache_data(ttl=30)  # Cache for 30 seconds
 def fetch_market_data(symbols):
     """Fetch current market data for all symbols"""
@@ -414,8 +437,8 @@ def calculate_portfolio_values(positions, market_data):
 # =============================================================================
 # HTML TABLE GENERATION
 # =============================================================================
-def create_portfolio_table_html(portfolio):
-    """Create TWS-style HTML table"""
+def create_portfolio_table_html(portfolio, categories=None):
+    """Create TWS-style HTML table with strategy column"""
     if not portfolio:
         return "<p style='color: #888;'>No positions</p>"
 
@@ -435,12 +458,14 @@ def create_portfolio_table_html(portfolio):
             <tr>
                 <th style="text-align: left;">DAILY P&L</th>
                 <th style="text-align: left;">FIN INSTR</th>
+                <th>STRATEGY</th>
                 <th>POS</th>
                 <th>MKT VAL</th>
                 <th>AVG PX</th>
                 <th>LAST</th>
                 <th>UNRLZ P&L</th>
                 <th>CHNG</th>
+                <th>SIGNAL</th>
             </tr>
         </thead>
         <tbody>
@@ -456,11 +481,13 @@ def create_portfolio_table_html(portfolio):
         <tr class="total-row">
             <td class="{total_pnl_class}">{total_pnl_str}</td>
             <td class="symbol-cell">TOTAL Stocks</td>
+            <td>-</td>
             <td>{total_qty:,.0f}</td>
             <td>{total_mkt_value:,.0f}</td>
             <td>-</td>
             <td>-</td>
             <td class="{total_unrlz_class}">{total_unrlz_str}</td>
+            <td>-</td>
             <td>-</td>
         </tr>
     """
@@ -471,22 +498,34 @@ def create_portfolio_table_html(portfolio):
         unrlz_class = "cell-positive" if p['unrealized_pnl'] >= 0 else "cell-negative"
         chng_class = "positive" if p['daily_change_pct'] >= 0 else "negative"
 
+        # Get strategy for symbol
+        strategy = get_symbol_strategy(p['symbol'], categories) if categories else "N/A"
+
+        # Signal color
+        signal = p.get('signal', 'N/A')
+        signal_class = "positive" if signal == "LONG" else "negative" if signal == "SHORT" else "neutral"
+
         # Format numbers
         daily_pnl_str = f"{p['daily_pnl']:+,.0f}" if p['daily_pnl'] != 0 else "0"
         unrlz_str = f"{p['unrealized_pnl']:+,.0f}" if p['unrealized_pnl'] != 0 else "0"
         chng_str = f"{p['daily_change_pct']:+.2f}"
         qty_str = f"{p['qty']:,}" if p['qty'] >= 0 else f"{p['qty']:,}"
 
+        # Strategy color (cyan for assigned, gray for none)
+        strat_class = "info-blue" if strategy != "NONE" else "gray"
+
         html += f"""
             <tr>
                 <td class="{pnl_class}">{daily_pnl_str}</td>
                 <td class="symbol-cell">{p['symbol']}</td>
+                <td class="{strat_class}">{strategy}</td>
                 <td>{qty_str}</td>
                 <td>{abs(p['mkt_value']):,.0f}</td>
                 <td>{p['avg_price']:.2f}</td>
                 <td>{p['last_price']:.2f}</td>
                 <td class="{unrlz_class}">{unrlz_str}</td>
                 <td class="{chng_class}">{chng_str}</td>
+                <td class="{signal_class}">{signal}</td>
             </tr>
         """
 
@@ -506,10 +545,11 @@ def main():
     # Inject CSS
     st.markdown(TWS_CSS, unsafe_allow_html=True)
 
-    # Load portfolio
+    # Load portfolio and categories
     config = load_portfolio_config()
     positions = config['positions']
     account = config['account']
+    categories = load_stock_categories()
 
     symbols = [p['symbol'] for p in positions]
 
@@ -615,8 +655,8 @@ def main():
 
     st.markdown("---")
 
-    # Portfolio Table
-    table_html = create_portfolio_table_html(portfolio)
+    # Portfolio Table (with strategy from stock_categories.json)
+    table_html = create_portfolio_table_html(portfolio, categories)
     st.markdown(table_html, unsafe_allow_html=True)
 
     # Cash Section
