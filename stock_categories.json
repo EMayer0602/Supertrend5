@@ -1,5 +1,5 @@
 {
-    "_comment": "Stock categories - Strategy per stock for trading",
+    "_comment": "Stock categories - 60 stocks, max 30 positions",
     "_last_updated": "2026-01-16",
     "strategies": {
         "SUPERTREND": {
@@ -11,7 +11,9 @@
             },
             "tickers": [
                 "PDYN", "QBTS", "MRNA", "PYPL", "PFE",
-                "NKE", "MRK", "TGT", "UNH", "NFLX"
+                "NKE", "MRK", "TGT", "UNH", "NFLX",
+                "SMCI", "ARM", "RIVN", "LCID", "NIO",
+                "SOFI", "HOOD", "AFRM", "UPST", "DKNG"
             ]
         },
         "BUY_HOLD": {
@@ -23,7 +25,10 @@
             "tickers": [
                 "PLTR", "NVDA", "MSTR", "QUBT", "COIN",
                 "AVGO", "MU", "META", "CRWD", "SHOP",
-                "AMD", "DRH", "INOD", "TSLA", "UBER"
+                "AMD", "DRH", "INOD", "TSLA", "UBER",
+                "GOOGL", "AAPL", "AMZN", "MSFT", "CRM",
+                "ORCL", "NOW", "ADBE", "PANW", "SNOW",
+                "V", "MA", "LLY", "BABA"
             ]
         },
         "TREND_FOLLOW": {
@@ -34,7 +39,8 @@
                 "trailing_stop_pct": 0.10
             },
             "tickers": [
-                "SPY", "QQQ", "JPM", "JNJ"
+                "SPY", "QQQ", "JPM", "JNJ",
+                "IWM", "DIA", "XLF", "XLK", "VTI", "VOO"
             ]
         },
         "GERMAN": {
