@@ -622,69 +622,6 @@ def fetch_data_ib(symbols: List[str]) -> Dict[str, pd.DataFrame]:
     return data
 
 
-def generate_synthetic_data(symbols: List[str], days: int = 400) -> Dict[str, pd.DataFrame]:
-    """Generate synthetic data for testing"""
-    np.random.seed(42)
-    data = {}
-
-    base_prices = {
-        'NVDA': 500, 'AMD': 140, 'AVGO': 180, 'META': 520, 'TSLA': 250,
-        'COIN': 250, 'MSTR': 450, 'PLTR': 70, 'SHOP': 100, 'UBER': 75,
-        'CRWD': 350, 'MU': 100, 'JPM': 200, 'INOD': 180, 'QUBT': 15,
-        'DRH': 10, 'MRNA': 50, 'MRK': 100, 'NFLX': 900, 'NKE': 75,
-        'PFE': 25, 'PYPL': 85, 'PDYN': 40, 'QBTS': 8, 'TKMS': 30,
-        'JNJ': 150, 'TGT': 130, 'UNH': 550, 'SPY': 580, 'QQQ': 500,
-        'GOOGL': 175, 'AAPL': 190, 'AMZN': 185, 'MSFT': 420, 'CRM': 280,
-        'ORCL': 130, 'NOW': 780, 'ADBE': 550, 'PANW': 320, 'SNOW': 180,
-        'V': 280, 'MA': 480, 'LLY': 780, 'BABA': 85,
-        'SMCI': 600, 'ARM': 140, 'RIVN': 15, 'LCID': 3, 'NIO': 5,
-        'SOFI': 10, 'HOOD': 20, 'AFRM': 45, 'UPST': 35, 'DKNG': 40,
-        'IWM': 210, 'DIA': 390, 'XLF': 42, 'XLK': 210, 'VTI': 270, 'VOO': 530
-    }
-
-    # Different behavior types for stocks
-    # Trending stocks benefit from BUY_HOLD
-    trending = ['NVDA', 'AVGO', 'META', 'PLTR', 'CRWD', 'GOOGL', 'AAPL', 'MSFT', 'LLY', 'NOW']
-    # Volatile/sideways stocks benefit from SUPERTREND
-    volatile = ['COIN', 'MSTR', 'QUBT', 'QBTS', 'MRNA', 'RIVN', 'LCID', 'NIO', 'UPST', 'AFRM']
-    # ETFs and stable stocks benefit from TREND_FOLLOW
-    stable = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'XLF', 'XLK', 'JPM', 'JNJ']
-
-    end_date = datetime.now()
-    dates = pd.date_range(end=end_date, periods=days, freq='B')
-
-    for symbol in symbols:
-        start_price = base_prices.get(symbol, 100)
-
-        # Set volatility and drift based on stock type
-        if symbol in trending:
-            vol = 0.025
-            drift = 0.0008  # Strong uptrend
-        elif symbol in volatile:
-            vol = 0.05
-            drift = 0.0001  # Sideways with high vol
-        elif symbol in stable:
-            vol = 0.012
-            drift = 0.0004  # Moderate trend, low vol
-        else:
-            vol = 0.03
-            drift = 0.0004
-
-        returns = np.random.normal(drift, vol, days)
-        prices = start_price * np.exp(np.cumsum(returns))
-
-        df = pd.DataFrame(index=dates)
-        df['close'] = prices
-        df['high'] = df['close'] * (1 + np.abs(np.random.normal(0, vol*0.5, days)))
-        df['low'] = df['close'] * (1 - np.abs(np.random.normal(0, vol*0.5, days)))
-        df['open'] = df['close'].shift(1).fillna(start_price)
-        df['high'] = df[['high', 'close', 'open']].max(axis=1)
-        df['low'] = df[['low', 'close', 'open']].min(axis=1)
-        df['volume'] = np.random.randint(1000000, 10000000, days)
-
-        data[symbol] = df
-
-    return data
 
 
 # =============================================================================
@@ -710,14 +647,19 @@ def main():
 
     # Fetch data
     print("\n" + "-"*120)
-    print("  FETCHING DATA...")
+    print("  FETCHING DATA FROM IB...")
     print("-"*120)
 
     data = fetch_data_ib(us_stocks)
 
     if len(data) < 10:
-        print("  Using synthetic data (IB not available)")
-        data = generate_synthetic_data(us_stocks)
+        print("\n  ERROR: Konnte keine IB Daten laden!")
+        print("  Bitte sicherstellen dass:")
+        print("    1. TWS oder IB Gateway läuft")
+        print("    2. API Verbindungen aktiviert sind (Port 7497)")
+        print("    3. Marktdaten-Abonnements vorhanden sind")
+        print("\n  Script beendet.")
+        return
 
     print(f"\n  Loaded data for {len(data)} symbols")
 

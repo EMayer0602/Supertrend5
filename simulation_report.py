@@ -50,12 +50,13 @@ def get_all_tickers() -> List[str]:
 
 
 def fetch_historical_data_ib(symbols: List[str], days: int = 365) -> Dict[str, pd.DataFrame]:
-    """Fetch historical data from Interactive Brokers"""
+    """Fetch historical data from Interactive Brokers - REQUIRES IB CONNECTION"""
     try:
         from ib_insync import IB, Stock, util
     except ImportError:
-        logger.error("ib_insync not installed, using synthetic data")
-        return generate_synthetic_data(symbols, days)
+        logger.error("ib_insync not installed!")
+        logger.error("Install with: pip install ib_insync")
+        return {}
 
     data = {}
     ib = IB()
@@ -95,92 +96,11 @@ def fetch_historical_data_ib(symbols: List[str], days: int = 365) -> Dict[str, p
 
     except Exception as e:
         logger.error(f"Could not connect to IB: {e}")
-        logger.info("Using synthetic data for backtesting...")
-        return generate_synthetic_data(symbols, days)
+        logger.error("Make sure TWS or IB Gateway is running on port 7497")
 
     return data
 
 
-def generate_synthetic_data(symbols: List[str], days: int = 400) -> Dict[str, pd.DataFrame]:
-    """Generate realistic synthetic stock data for backtesting"""
-    np.random.seed(42)
-    data = {}
-
-    # Extended base prices for all 60 stocks
-    base_prices = {
-        'NVDA': 500, 'AMD': 140, 'AVGO': 180, 'META': 520, 'TSLA': 250,
-        'COIN': 250, 'MSTR': 450, 'PLTR': 70, 'SHOP': 100, 'UBER': 75,
-        'CRWD': 350, 'MU': 100, 'JPM': 200, 'INOD': 180, 'QUBT': 15,
-        'DRH': 10, 'MRNA': 50, 'MRK': 100, 'NFLX': 900, 'NKE': 75,
-        'PFE': 25, 'PYPL': 85, 'PDYN': 40, 'QBTS': 8, 'TKMS': 30,
-        'JNJ': 150, 'TGT': 130, 'UNH': 550, 'SPY': 580, 'QQQ': 500,
-        'GOOGL': 175, 'AAPL': 190, 'AMZN': 185, 'MSFT': 420, 'CRM': 280,
-        'ORCL': 130, 'NOW': 780, 'ADBE': 550, 'PANW': 320, 'SNOW': 180,
-        'V': 280, 'MA': 480, 'LLY': 780, 'BABA': 85,
-        'SMCI': 600, 'ARM': 140, 'RIVN': 15, 'LCID': 3, 'NIO': 5,
-        'SOFI': 10, 'HOOD': 20, 'AFRM': 45, 'UPST': 35, 'DKNG': 40,
-        'IWM': 210, 'DIA': 390, 'XLF': 42, 'XLK': 210, 'VTI': 270, 'VOO': 530
-    }
-
-    volatility = {
-        'NVDA': 0.035, 'AMD': 0.035, 'AVGO': 0.025, 'META': 0.03, 'TSLA': 0.045,
-        'COIN': 0.05, 'MSTR': 0.06, 'PLTR': 0.04, 'SHOP': 0.035, 'UBER': 0.03,
-        'CRWD': 0.035, 'MU': 0.035, 'JPM': 0.02, 'INOD': 0.04, 'QUBT': 0.08,
-        'DRH': 0.025, 'MRNA': 0.045, 'MRK': 0.02, 'NFLX': 0.03, 'NKE': 0.025,
-        'PFE': 0.02, 'PYPL': 0.035, 'PDYN': 0.04, 'QBTS': 0.08, 'TKMS': 0.03,
-        'JNJ': 0.015, 'TGT': 0.025, 'UNH': 0.02, 'SPY': 0.012, 'QQQ': 0.015,
-        'GOOGL': 0.025, 'AAPL': 0.022, 'AMZN': 0.028, 'MSFT': 0.022, 'CRM': 0.03,
-        'ORCL': 0.025, 'NOW': 0.03, 'ADBE': 0.028, 'PANW': 0.035, 'SNOW': 0.045,
-        'V': 0.018, 'MA': 0.018, 'LLY': 0.025, 'BABA': 0.04,
-        'SMCI': 0.06, 'ARM': 0.045, 'RIVN': 0.07, 'LCID': 0.08, 'NIO': 0.065,
-        'SOFI': 0.055, 'HOOD': 0.055, 'AFRM': 0.06, 'UPST': 0.065, 'DKNG': 0.045,
-        'IWM': 0.015, 'DIA': 0.012, 'XLF': 0.018, 'XLK': 0.016, 'VTI': 0.013, 'VOO': 0.012
-    }
-
-    drift = {
-        'NVDA': 0.001, 'AMD': 0.0008, 'AVGO': 0.0007, 'META': 0.0006, 'TSLA': 0.0005,
-        'COIN': 0.0003, 'MSTR': 0.0002, 'PLTR': 0.0008, 'SHOP': 0.0004, 'UBER': 0.0005,
-        'CRWD': 0.0006, 'MU': 0.0005, 'JPM': 0.0004, 'INOD': 0.0007, 'QUBT': 0.001,
-        'DRH': 0.0003, 'MRNA': -0.0002, 'MRK': 0.0002, 'NFLX': 0.0005, 'NKE': 0.0001,
-        'PFE': -0.0001, 'PYPL': 0.0003, 'PDYN': 0.0004, 'QBTS': 0.0008, 'TKMS': 0.0003,
-        'JNJ': 0.0002, 'TGT': 0.0002, 'UNH': 0.0003, 'SPY': 0.0004, 'QQQ': 0.0005,
-        'GOOGL': 0.0005, 'AAPL': 0.0004, 'AMZN': 0.0005, 'MSFT': 0.0005, 'CRM': 0.0004,
-        'ORCL': 0.0004, 'NOW': 0.0006, 'ADBE': 0.0004, 'PANW': 0.0005, 'SNOW': 0.0003,
-        'V': 0.0003, 'MA': 0.0003, 'LLY': 0.0006, 'BABA': 0.0001,
-        'SMCI': 0.0008, 'ARM': 0.0007, 'RIVN': -0.0002, 'LCID': -0.0003, 'NIO': -0.0002,
-        'SOFI': 0.0004, 'HOOD': 0.0005, 'AFRM': 0.0003, 'UPST': 0.0002, 'DKNG': 0.0004,
-        'IWM': 0.0003, 'DIA': 0.0003, 'XLF': 0.0003, 'XLK': 0.0004, 'VTI': 0.0004, 'VOO': 0.0004
-    }
-
-    end_date = datetime.now()
-    dates = pd.date_range(end=end_date, periods=days, freq='B')
-
-    logger.info(f"Generating synthetic data for {len(symbols)} symbols...")
-
-    for symbol in symbols:
-        start_price = base_prices.get(symbol, 100)
-        vol = volatility.get(symbol, 0.03)
-        mu = drift.get(symbol, 0.0003)
-
-        returns = np.random.normal(mu, vol, days)
-        prices = start_price * np.exp(np.cumsum(returns))
-
-        df = pd.DataFrame(index=dates)
-        df['close'] = prices
-
-        daily_range = vol * 0.5
-        df['high'] = df['close'] * (1 + np.abs(np.random.normal(0, daily_range, days)))
-        df['low'] = df['close'] * (1 - np.abs(np.random.normal(0, daily_range, days)))
-        df['open'] = df['close'].shift(1).fillna(start_price) * (1 + np.random.normal(0, vol*0.3, days))
-
-        df['high'] = df[['high', 'close', 'open']].max(axis=1)
-        df['low'] = df[['low', 'close', 'open']].min(axis=1)
-        df['volume'] = np.random.randint(1000000, 10000000, days)
-
-        data[symbol] = df
-
-    logger.info(f"Generated synthetic data for {len(data)} symbols")
-    return data
 
 
 # =============================================================================
@@ -802,8 +722,13 @@ def main():
     data = fetch_historical_data_ib(tickers, days=400)
 
     if len(data) < 10:
-        print("  Using synthetic data (IB not connected)")
-        data = generate_synthetic_data(tickers, days=400)
+        print("\n  ERROR: Konnte keine IB Daten laden!")
+        print("  Bitte sicherstellen dass:")
+        print("    1. TWS oder IB Gateway läuft")
+        print("    2. API Verbindungen aktiviert sind (Port 7497)")
+        print("    3. Marktdaten-Abonnements vorhanden sind")
+        print("\n  Script beendet.")
+        return
 
     print(f"\n  Loaded data for {len(data)} symbols")
 
