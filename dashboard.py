@@ -551,11 +551,11 @@ def main():
     total_unrealized = sum(p['unrealized_pnl'] for p in portfolio)
     total_mkt_value = sum(abs(p['mkt_value']) for p in portfolio)
 
-    # Account values
+    # Account values - use from config if available, otherwise calculate
     cash_total = account.get('usd_cash', 0) + account.get('eur_cash', 0)
-    net_liquidity = total_mkt_value + cash_total
-    excess_liq = net_liquidity * 0.85
-    maintenance = net_liquidity * 0.15
+    net_liquidity = account.get('net_liquidity', total_mkt_value + cash_total)
+    excess_liq = account.get('excess_liquidity', net_liquidity * 0.85)
+    maintenance = account.get('maintenance', net_liquidity * 0.15)
 
     # P&L Summary Row
     st.markdown("---")
