@@ -264,12 +264,19 @@ get_signal = get_supertrend_signal
 
 def calculate_ema(close: np.ndarray, period: int) -> np.ndarray:
     """Calculate Exponential Moving Average"""
-    ema = np.zeros_like(close)
+    n = len(close)
+    ema = np.zeros(n)
+
+    # Not enough data
+    if n < period:
+        ema[:] = np.nan
+        return ema
+
     ema[:period] = np.nan
     ema[period-1] = np.mean(close[:period])
 
     multiplier = 2 / (period + 1)
-    for i in range(period, len(close)):
+    for i in range(period, n):
         ema[i] = close[i] * multiplier + ema[i-1] * (1 - multiplier)
 
     return ema

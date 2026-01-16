@@ -311,7 +311,7 @@ def run_backtest(data: Dict[str, pd.DataFrame]) -> BacktestEngine:
                 continue
 
             df_slice = data[symbol].loc[:date].copy()
-            if len(df_slice) < 30:
+            if len(df_slice) < 60:  # Need 60 for EMA 50 + buffer
                 continue
 
             strat = ticker_strategies.get(symbol, "SUPERTREND")
