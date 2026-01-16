@@ -80,3 +80,42 @@
 2026-01-16 08:51:34,482 - INFO - Strategy assignments: {'NKE': 'SUPERTREND', 'NVDA': 'BUY_HOLD', 'PFE': 'SUPERTREND', 'TKMS': 'SUPERTREND', 'DRH': 'BUY_HOLD'}...
 2026-01-16 08:51:39,935 - INFO - Running backtest: 252 days, strategy=total_pnl
 2026-01-16 08:51:39,939 - INFO - Strategy assignments: {'NKE': 'SUPERTREND', 'NVDA': 'BUY_HOLD', 'PFE': 'SUPERTREND', 'TKMS': 'SUPERTREND', 'DRH': 'BUY_HOLD'}...
+2026-01-16 08:55:11,944 - INFO - Connecting to 127.0.0.1:7497 with clientId 51...
+2026-01-16 08:55:11,945 - INFO - Disconnecting
+2026-01-16 08:55:11,945 - ERROR - API connection failed: ConnectionRefusedError(111, "Connect call failed ('127.0.0.1', 7497)")
+2026-01-16 08:55:11,946 - ERROR - Make sure API port on TWS/IBG is open
+2026-01-16 08:55:11,946 - ERROR - Could not connect to IB: [Errno 111] Connect call failed ('127.0.0.1', 7497)
+2026-01-16 08:55:11,946 - INFO - Using synthetic data for backtesting...
+2026-01-16 08:55:11,950 - INFO - Generating synthetic data for 30 symbols...
+2026-01-16 08:55:11,956 - INFO -   MSTR: 400 days (synthetic)
+2026-01-16 08:55:11,959 - INFO -   JPM: 400 days (synthetic)
+2026-01-16 08:55:11,962 - INFO -   QQQ: 400 days (synthetic)
+2026-01-16 08:55:11,966 - INFO -   TSLA: 400 days (synthetic)
+2026-01-16 08:55:11,969 - INFO -   PDYN: 400 days (synthetic)
+2026-01-16 08:55:11,973 - INFO -   QUBT: 400 days (synthetic)
+2026-01-16 08:55:11,976 - INFO -   AVGO: 400 days (synthetic)
+2026-01-16 08:55:11,979 - INFO -   AMD: 400 days (synthetic)
+2026-01-16 08:55:11,982 - INFO -   MRK: 400 days (synthetic)
+2026-01-16 08:55:11,986 - INFO -   SHOP: 400 days (synthetic)
+2026-01-16 08:55:11,989 - INFO -   COIN: 400 days (synthetic)
+2026-01-16 08:55:11,992 - INFO -   CRWD: 400 days (synthetic)
+2026-01-16 08:55:11,995 - INFO -   DRH: 400 days (synthetic)
+2026-01-16 08:55:11,999 - INFO -   PYPL: 400 days (synthetic)
+2026-01-16 08:55:12,002 - INFO -   MRNA: 400 days (synthetic)
+2026-01-16 08:55:12,006 - INFO -   JNJ: 400 days (synthetic)
+2026-01-16 08:55:12,010 - INFO -   SPY: 400 days (synthetic)
+2026-01-16 08:55:12,015 - INFO -   NFLX: 400 days (synthetic)
+2026-01-16 08:55:12,018 - INFO -   NVDA: 400 days (synthetic)
+2026-01-16 08:55:12,022 - INFO -   META: 400 days (synthetic)
+2026-01-16 08:55:12,025 - INFO -   TKMS: 400 days (synthetic)
+2026-01-16 08:55:12,028 - INFO -   UNH: 400 days (synthetic)
+2026-01-16 08:55:12,031 - INFO -   NKE: 400 days (synthetic)
+2026-01-16 08:55:12,035 - INFO -   PFE: 400 days (synthetic)
+2026-01-16 08:55:12,038 - INFO -   MU: 400 days (synthetic)
+2026-01-16 08:55:12,042 - INFO -   QBTS: 400 days (synthetic)
+2026-01-16 08:55:12,045 - INFO -   INOD: 400 days (synthetic)
+2026-01-16 08:55:12,049 - INFO -   TGT: 400 days (synthetic)
+2026-01-16 08:55:12,053 - INFO -   PLTR: 400 days (synthetic)
+2026-01-16 08:55:12,056 - INFO -   UBER: 400 days (synthetic)
+2026-01-16 08:55:12,070 - INFO - Running backtest: 252 days
+2026-01-16 08:55:12,070 - INFO - Strategies: {'MSTR': 'BUY_HOLD', 'JPM': 'BUY_HOLD', 'QQQ': 'TREND_FOLLOW', 'TSLA': 'BUY_HOLD', 'PDYN': 'SUPERTREND', 'QUBT': 'BUY_HOLD', 'AVGO': 'BUY_HOLD', 'AMD': 'BUY_HOLD', 'MRK': 'SUPERTREND', 'SHOP': 'BUY_HOLD', 'COIN': 'BUY_HOLD', 'CRWD': 'BUY_HOLD', 'DRH': 'BUY_HOLD', 'PYPL': 'SUPERTREND', 'MRNA': 'SUPERTREND', 'JNJ': 'KAMA', 'SPY': 'TREND_FOLLOW', 'NFLX': 'SUPERTREND', 'NVDA': 'BUY_HOLD', 'META': 'BUY_HOLD', 'TKMS': 'SUPERTREND', 'UNH': 'JMA', 'NKE': 'SUPERTREND', 'PFE': 'SUPERTREND', 'MU': 'BUY_HOLD', 'QBTS': 'SUPERTREND', 'INOD': 'BUY_HOLD', 'TGT': 'KAMA', 'PLTR': 'BUY_HOLD', 'UBER': 'BUY_HOLD'}
