@@ -8,6 +8,7 @@ Simulates a daily rotation strategy over 1 year:
 - Compare: Worst by Daily PnL vs Worst by Total PnL
 
 Uses historical data from IB or Yahoo Finance.
+Uses proper strategy per stock from ib_paper_trader.py
 """
 
 import pandas as pd
@@ -17,6 +18,17 @@ from typing import Dict, List, Optional, Tuple
 import json
 import logging
 import sys
+
+# Import indicator functions from ib_paper_trader
+from ib_paper_trader import (
+    calculate_supertrend, get_supertrend_signal,
+    apply_kama_strategy, get_kama_signal,
+    apply_jma_strategy, get_jma_signal,
+    apply_buy_hold_strategy, get_buy_hold_signal,
+    apply_trend_follow_strategy, get_trend_follow_signal,
+    get_signal_for_strategy, get_ticker_strategy,
+    get_stocks_by_strategy
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -215,87 +227,9 @@ def fetch_historical_data_ib(symbols: List[str], days: int = 400) -> Dict[str, p
 
 
 # =============================================================================
-# SUPERTREND INDICATOR
-# =============================================================================
-def calculate_atr(high, low, close, period=14):
-    """Calculate Average True Range"""
-    tr1 = high - low
-    tr2 = np.abs(high - np.roll(close, 1))
-    tr3 = np.abs(low - np.roll(close, 1))
-    tr = np.maximum(np.maximum(tr1, tr2), tr3)
-    tr[0] = tr1[0]
-
-    atr = np.zeros(len(tr))
-    atr[period-1] = np.mean(tr[:period])
-
-    for i in range(period, len(tr)):
-        atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
-
-    return atr
-
-
-def calculate_supertrend(df: pd.DataFrame, period: int = 15, multiplier: float = 4.0) -> pd.DataFrame:
-    """Calculate Supertrend indicator"""
-    high = df['high'].values
-    low = df['low'].values
-    close = df['close'].values
-
-    atr = calculate_atr(high, low, close, period)
-    hl2 = (high + low) / 2
-
-    basic_upper = hl2 + (multiplier * atr)
-    basic_lower = hl2 - (multiplier * atr)
-
-    n = len(close)
-    final_upper = np.zeros(n)
-    final_lower = np.zeros(n)
-    supertrend = np.zeros(n)
-    direction = np.zeros(n)
-
-    final_upper[0] = basic_upper[0]
-    final_lower[0] = basic_lower[0]
-
-    for i in range(1, n):
-        if basic_upper[i] < final_upper[i-1] or close[i-1] > final_upper[i-1]:
-            final_upper[i] = basic_upper[i]
-        else:
-            final_upper[i] = final_upper[i-1]
-
-        if basic_lower[i] > final_lower[i-1] or close[i-1] < final_lower[i-1]:
-            final_lower[i] = basic_lower[i]
-        else:
-            final_lower[i] = final_lower[i-1]
-
-        if i < period:
-            direction[i] = 1
-            supertrend[i] = final_lower[i]
-        else:
-            if supertrend[i-1] == final_upper[i-1]:
-                if close[i] > final_upper[i]:
-                    direction[i] = 1
-                    supertrend[i] = final_lower[i]
-                else:
-                    direction[i] = -1
-                    supertrend[i] = final_upper[i]
-            else:
-                if close[i] < final_lower[i]:
-                    direction[i] = -1
-                    supertrend[i] = final_upper[i]
-                else:
-                    direction[i] = 1
-                    supertrend[i] = final_lower[i]
-
-    df = df.copy()
-    df['supertrend'] = supertrend
-    df['st_direction'] = direction
-    df['signal'] = np.where(direction == 1, 'BUY', 'SELL')
-
-    return df
-
-
-# =============================================================================
 # BACKTEST ENGINE
 # =============================================================================
+# Note: Indicators (Supertrend, KAMA, JMA, etc.) are imported from ib_paper_trader.py
 class Position:
     """Represents an open position"""
     def __init__(self, symbol: str, entry_price: float, quantity: int, entry_date: str):
@@ -503,14 +437,12 @@ def run_backtest(
 
     logger.info(f"Running backtest: {len(sorted_dates)} days, strategy={strategy}")
 
-    # Calculate signals for all stocks
-    signals = {}
-    for symbol, df in data.items():
-        try:
-            df_with_st = calculate_supertrend(df.copy())
-            signals[symbol] = df_with_st
-        except Exception as e:
-            logger.warning(f"Could not calculate Supertrend for {symbol}: {e}")
+    # Get strategy assignments per ticker from stock_categories.json
+    ticker_strategies = {}
+    for symbol in data.keys():
+        ticker_strategies[symbol] = get_ticker_strategy(symbol)
+
+    logger.info(f"Strategy assignments: {dict((s, ticker_strategies[s]) for s in list(ticker_strategies.keys())[:5])}...")
 
     prev_prices = {}
 
@@ -526,14 +458,29 @@ def run_backtest(
         # Update position prices
         engine.update_prices(current_prices)
 
+        # Get signals for this date using proper strategy per ticker
+        def get_signal_at_date(symbol: str, date) -> str:
+            """Get signal for symbol at specific date using its assigned strategy"""
+            if symbol not in data:
+                return "HOLD"
+            df = data[symbol]
+            if date not in df.index:
+                return "HOLD"
+            # Get data up to this date for signal calculation
+            df_slice = df.loc[:date].copy()
+            if len(df_slice) < 20:
+                return "HOLD"
+            # Use proper strategy for this ticker
+            strat = ticker_strategies.get(symbol, "SUPERTREND")
+            return get_signal_for_strategy(df_slice, strat)
+
         if i == 0:
             # Day 1: Open initial positions with BUY signals
             buy_candidates = []
-            for symbol in signals:
-                if symbol in signals and date in signals[symbol].index:
-                    sig = signals[symbol].loc[date, 'signal']
-                    if sig == 'BUY' and symbol in current_prices:
-                        buy_candidates.append(symbol)
+            for symbol in data.keys():
+                sig = get_signal_at_date(symbol, date)
+                if sig == 'BUY' and symbol in current_prices:
+                    buy_candidates.append(symbol)
 
             # Buy up to max_positions
             for symbol in buy_candidates[:max_positions]:
@@ -555,12 +502,11 @@ def run_backtest(
 
                 # Find new buy candidates (not already held, with BUY signal)
                 buy_candidates = []
-                for symbol in signals:
+                for symbol in data.keys():
                     if symbol not in engine.positions:
-                        if symbol in signals and date in signals[symbol].index:
-                            sig = signals[symbol].loc[date, 'signal']
-                            if sig == 'BUY' and symbol in current_prices:
-                                buy_candidates.append(symbol)
+                        sig = get_signal_at_date(symbol, date)
+                        if sig == 'BUY' and symbol in current_prices:
+                            buy_candidates.append(symbol)
 
                 # Buy new positions
                 for symbol in buy_candidates[:daily_rotation]:
