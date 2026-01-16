@@ -20,10 +20,11 @@ FLEXQUERY:
     Aktivierung: Account Management -> Reports -> Flex Queries
 
 Usage:
-    python generate_dashboard.py                    # Generate dashboard
-    python generate_dashboard.py --live             # Auto-refresh every 30s
+    python generate_dashboard.py                    # Generate dashboard (auto-refresh 30s)
+    python generate_dashboard.py --no-live          # No auto-refresh
     python generate_dashboard.py --port 7496        # Use live trading port
     python generate_dashboard.py --setup-flex       # Setup FlexQuery
+    python generate_dashboard.py --test-flex        # Test FlexQuery data
 """
 
 import json
@@ -993,13 +994,18 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
 
     # Position chart data
     positions = data.get('positions', [])
-    pos_symbols = json.dumps([p['symbol'] for p in positions[:10]])
-    pos_pnl = json.dumps([p['unrealized_pnl'] for p in positions[:10]])
-    pos_colors = json.dumps(['#00d26a' if p['unrealized_pnl'] >= 0 else '#ff4757' for p in positions[:10]])
+    # Sort positions by PnL for the chart (all positions)
+    positions_by_pnl = sorted(positions, key=lambda p: p['unrealized_pnl'], reverse=True)
+    pos_symbols = json.dumps([p['symbol'] for p in positions_by_pnl])
+    pos_pnl = json.dumps([p['unrealized_pnl'] for p in positions_by_pnl])
+    pos_colors = json.dumps(['#00d26a' if p['unrealized_pnl'] >= 0 else '#ff4757' for p in positions_by_pnl])
+
+    # Sort positions by entry date/time
+    positions_sorted = sorted(positions, key=lambda p: (p.get('entry_date', '') or '9999', p.get('entry_time', '') or ''), reverse=True)
 
     # Positions table
     positions_html = ""
-    for pos in positions:
+    for pos in positions_sorted:
         pnl_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
         # Entry date/time formatting
         entry_date = pos.get('entry_date', '')
@@ -1032,11 +1038,12 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         </tr>
         """
 
-    # Closed trades table - last quarter only (90 days)
+    # Closed trades table - 2026 only, sorted by entry date/time
     from datetime import datetime, timedelta
-    cutoff_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-    recent_trades = [t for t in closed_trades if t.get('exit_date', '') >= cutoff_date]
-    closed_trades_sorted = sorted(recent_trades, key=lambda x: x.get('exit_date', ''), reverse=True)
+    # Filter for 2026 trades only
+    recent_trades = [t for t in closed_trades if t.get('entry_date', '').startswith('2026')]
+    # Sort by entry date/time (newest first)
+    closed_trades_sorted = sorted(recent_trades, key=lambda x: (x.get('entry_date', ''), x.get('entry_time', '')), reverse=True)
     closed_trades_html = ""
     total_closed_pnl = sum(t.get('pnl', 0) for t in recent_trades)
 
@@ -1342,10 +1349,10 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     <div class="bottom-row">
         <div class="chart-card">
             <div class="chart-header">
-                <span class="chart-title">Unrealized PnL by Position</span>
+                <span class="chart-title">Open Trades PnL (alle {num_positions} Positionen)</span>
                 <span class="chart-value {unrealized_class}">${unrealized:+,.2f}</span>
             </div>
-            <div class="chart-container">
+            <div class="chart-container" style="height: {max(300, num_positions * 18)}px;">
                 <canvas id="positionPnlChart"></canvas>
             </div>
         </div>
@@ -1414,7 +1421,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     </div>
 
     <div class="positions-card">
-        <div class="positions-title">Closed Trades - Last Quarter ({len(recent_trades)}) <span class="{closed_pnl_class}" style="float:right;">Total: ${total_closed_pnl:+,.2f}</span></div>
+        <div class="positions-title">Closed Trades 2026 ({len(recent_trades)}) <span class="{closed_pnl_class}" style="float:right;">Total: ${total_closed_pnl:+,.2f}</span></div>
         <table class="positions-table">
             <thead>
                 <tr>
@@ -1546,8 +1553,8 @@ def main():
     # Load config
     config = load_config()
 
-    # Parse arguments
-    auto_refresh = "--live" in sys.argv
+    # Parse arguments - auto-refresh is now default (30 sec), use --no-live to disable
+    auto_refresh = "--no-live" not in sys.argv
     port = config.get('ib_port', IB_PORT)
 
     for i, arg in enumerate(sys.argv):
