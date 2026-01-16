@@ -264,19 +264,12 @@ get_signal = get_supertrend_signal
 
 def calculate_ema(close: np.ndarray, period: int) -> np.ndarray:
     """Calculate Exponential Moving Average"""
-    n = len(close)
-    ema = np.zeros(n)
-
-    # Not enough data
-    if n < period:
-        ema[:] = np.nan
-        return ema
-
+    ema = np.zeros_like(close)
     ema[:period] = np.nan
     ema[period-1] = np.mean(close[:period])
 
     multiplier = 2 / (period + 1)
-    for i in range(period, n):
+    for i in range(period, len(close)):
         ema[i] = close[i] * multiplier + ema[i-1] * (1 - multiplier)
 
     return ema
@@ -418,19 +411,20 @@ def calculate_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
 
 def apply_trend_follow_strategy(df: pd.DataFrame) -> pd.DataFrame:
     """
-    TREND_FOLLOW Strategy for ETFs/stable stocks using EMA 20/50
-    - Buy when EMA 20 crosses above EMA 50
-    - Sell when EMA 20 crosses below EMA 50
+    TREND_FOLLOW Strategy for stable uptrends using KAMA
+    - KAMA adapts to volatility (faster in trends, slower in chop)
+    - Buy when fast KAMA crosses above slow KAMA
+    - Sell when fast KAMA crosses below slow KAMA
     """
     close = df['close'].values
 
-    # EMA 20/50 crossover
-    ema_fast = calculate_ema(close, 20)
-    ema_slow = calculate_ema(close, 50)
+    # Use KAMA instead of EMA for better adaptation
+    kama_fast = calculate_kama(close, period=10, fast=2, slow=30)
+    kama_slow = calculate_kama(close, period=30, fast=2, slow=30)
 
-    df['ema_fast'] = ema_fast
-    df['ema_slow'] = ema_slow
-    df['trend_follow_signal'] = np.where(ema_fast > ema_slow, 1, -1)
+    df['kama_fast'] = kama_fast
+    df['kama_slow'] = kama_slow
+    df['trend_follow_signal'] = np.where(kama_fast > kama_slow, 1, -1)
 
     return df
 
@@ -543,13 +537,18 @@ def get_signal_for_strategy(df: pd.DataFrame, strategy: str) -> str:
     if strategy == "SUPERTREND":
         df = calculate_supertrend(df)
         return get_supertrend_signal(df)
-    elif strategy == "GERMAN":
-        # German stocks use Supertrend (same as SUPERTREND)
-        df = calculate_supertrend(df)
-        return get_supertrend_signal(df)
+    elif strategy == "KAMA":
+        df = apply_kama_strategy(df)
+        return get_kama_signal(df)
+    elif strategy == "JMA":
+        df = apply_jma_strategy(df)
+        return get_jma_signal(df)
     elif strategy == "TREND_FOLLOW":
         df = apply_trend_follow_strategy(df)
         return get_trend_follow_signal(df)
+    elif strategy == "MOMENTUM":
+        df = apply_momentum_strategy(df)
+        return get_momentum_signal(df)
     elif strategy == "BUY_HOLD":
         df = apply_buy_hold_strategy(df)
         return get_buy_hold_signal(df)
