@@ -1053,8 +1053,9 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     positions_html = ""
     for pos in positions:
         daily_class = "positive" if pos.get('daily_pnl', 0) >= 0 else "negative"
+        unrealized_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
         realized_class = "positive" if pos.get('realized_pnl', 0) >= 0 else "negative"
-        pnl_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
+        pnl_class = "positive" if pos['pnl_pct'] >= 0 else "negative"
 
         # Show realized only if non-zero
         realized_pnl = pos.get('realized_pnl', 0)
@@ -1068,6 +1069,7 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
             <td>${pos.get('market_value', 0):,.0f}</td>
             <td>${pos['entry_price']:,.2f}</td>
             <td>${pos['current_price']:,.2f}</td>
+            <td class="{unrealized_class}">${pos['unrealized_pnl']:+,.0f}</td>
             <td class="{realized_class}">{realized_str}</td>
             <td class="{pnl_class}">{pos['pnl_pct']:+.2f}%</td>
         </tr>
@@ -1446,12 +1448,13 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
                     <th>MKT VAL</th>
                     <th>AVG PX</th>
                     <th>LAST</th>
+                    <th>UNRLZD</th>
                     <th>RLZD</th>
                     <th>CHNG</th>
                 </tr>
             </thead>
             <tbody>
-                {positions_html if positions_html else '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
+                {positions_html if positions_html else '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
             </tbody>
         </table>
     </div>
