@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 INITIAL_CAPITAL = 20000
 MAX_POSITIONS = 30
-SIMULATION_DAYS = 252  # 1 trading year
+SIMULATION_DAYS = 365  # Full calendar year
 FEE_PER_TRADE = 1.0
 
 CATEGORIES_FILE = "stock_categories.json"
