@@ -32,6 +32,9 @@ FEE_PER_TRADE = 1.0
 
 CATEGORIES_FILE = "stock_categories.json"
 
+# HTF Filter periods to test
+HTF_PERIODS = [50, 100, 150, 200, 250]
+
 # Strategy settings
 STRATEGY_SETTINGS = {
     'SUPERTREND': {
@@ -390,24 +393,24 @@ def get_ema_signal(df: pd.DataFrame, settings: dict) -> str:
 
 
 def check_htf_filter(df: pd.DataFrame, period: int = 200) -> bool:
-    """HTF Filter: Price above 200 SMA = bullish trend"""
+    """HTF Filter: Price above SMA = bullish trend"""
     if len(df) < period:
         return True  # Not enough data, allow trades
 
     close = df['close'].values
-    sma200 = calculate_sma(close, period)
+    sma = calculate_sma(close, period)
 
-    if np.isnan(sma200[-1]):
+    if np.isnan(sma[-1]):
         return True
 
-    # Price above SMA200 = bullish, allow buys
-    return close[-1] > sma200[-1]
+    # Price above SMA = bullish, allow buys
+    return close[-1] > sma[-1]
 
 
-def get_signal(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = False) -> str:
+def get_signal(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = False, htf_period: int = 200) -> str:
     """Get signal for a specific strategy, optionally with HTF filter"""
     # Get base signal
-    base_strategy = strategy.replace('_HTF', '')
+    base_strategy = strategy.replace('_HTF', '').split('_')[0]  # Remove _HTF and _XXX suffixes
 
     if base_strategy == 'SUPERTREND':
         signal = get_supertrend_signal(df, settings)
@@ -426,8 +429,8 @@ def get_signal(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = 
 
     # Apply HTF filter if enabled
     if use_htf and signal == "BUY":
-        if not check_htf_filter(df):
-            return "HOLD"  # Block buy if below 200 SMA
+        if not check_htf_filter(df, htf_period):
+            return "HOLD"  # Block buy if below HTF SMA
 
     return signal
 
@@ -435,7 +438,7 @@ def get_signal(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = 
 # =============================================================================
 # BACKTESTER
 # =============================================================================
-def backtest_stock_strategy(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = False) -> dict:
+def backtest_stock_strategy(df: pd.DataFrame, strategy: str, settings: dict, use_htf: bool = False, htf_period: int = 200) -> dict:
     """Backtest a single stock with a single strategy"""
     capital = INITIAL_CAPITAL
     position = 0
@@ -486,7 +489,7 @@ def backtest_stock_strategy(df: pd.DataFrame, strategy: str, settings: dict, use
                 reentry_cooldown -= 1
 
         # Get signal (with optional HTF filter)
-        signal = get_signal(df_slice, strategy, settings, use_htf)
+        signal = get_signal(df_slice, strategy, settings, use_htf, htf_period)
 
         # Execute trades
         if signal == "BUY" and position == 0 and reentry_cooldown == 0:
@@ -688,10 +691,11 @@ def generate_synthetic_data(symbols: List[str], days: int = 400) -> Dict[str, pd
 # MAIN
 # =============================================================================
 def main():
-    print("="*100)
-    print("         STOCK STRATEGY CATEGORIZER - 6 Strategies + HTF Filter")
-    print("         Tests: SUPERTREND, KAMA, JMA, TREND_FOLLOW, SMA, EMA (each with/without HTF)")
-    print("="*100)
+    print("="*120)
+    print("         STOCK STRATEGY CATEGORIZER - 6 Strategies + Optimized HTF Filter")
+    print("         Tests: SUPERTREND, KAMA, JMA, TREND_FOLLOW, SMA, EMA")
+    print(f"         HTF Periods: {HTF_PERIODS} (total {6 + 6*len(HTF_PERIODS)} combinations)")
+    print("="*120)
 
     # Get all tickers
     tickers = get_all_tickers()
@@ -705,9 +709,9 @@ def main():
     print(f"German stocks: {len(german_stocks)}")
 
     # Fetch data
-    print("\n" + "-"*100)
+    print("\n" + "-"*120)
     print("  FETCHING DATA...")
-    print("-"*100)
+    print("-"*120)
 
     data = fetch_data_ib(us_stocks)
 
@@ -717,17 +721,28 @@ def main():
 
     print(f"\n  Loaded data for {len(data)} symbols")
 
-    # Define all strategy combinations (6 base + 6 with HTF = 12 total)
+    # Define all strategy combinations
+    # 6 base strategies + 6 strategies * 5 HTF periods = 36 total
     base_strategies = ['SUPERTREND', 'KAMA', 'JMA', 'TREND_FOLLOW', 'SMA', 'EMA']
+
     all_strategies = []
+    # Without HTF
     for strat in base_strategies:
-        all_strategies.append((strat, False))  # Without HTF
-        all_strategies.append((strat + '_HTF', True))  # With HTF filter
+        all_strategies.append((strat, False, 0))
+
+    # With HTF for each period
+    for strat in base_strategies:
+        for htf_period in HTF_PERIODS:
+            strat_name = f"{strat}_HTF{htf_period}"
+            all_strategies.append((strat_name, True, htf_period))
+
+    total_combos = len(all_strategies)
+    print(f"\n  Testing {total_combos} strategy combinations per stock...")
 
     # Test each stock with each strategy
-    print("\n" + "-"*100)
-    print("  TESTING 12 STRATEGY COMBINATIONS...")
-    print("-"*100)
+    print("\n" + "-"*120)
+    print(f"  TESTING {total_combos} STRATEGY COMBINATIONS...")
+    print("-"*120)
 
     results = {}
 
@@ -738,11 +753,12 @@ def main():
 
         results[symbol] = {}
 
-        for strat_name, use_htf in all_strategies:
-            base_strat = strat_name.replace('_HTF', '')
+        for strat_name, use_htf, htf_period in all_strategies:
+            base_strat = strat_name.split('_HTF')[0]
             settings = STRATEGY_SETTINGS.get(base_strat, STRATEGY_SETTINGS['SUPERTREND'])
-            result = backtest_stock_strategy(df, base_strat, settings, use_htf)
+            result = backtest_stock_strategy(df, base_strat, settings, use_htf, htf_period)
             result['strategy'] = strat_name
+            result['htf_period'] = htf_period
             results[symbol][strat_name] = result
 
         # Find best strategy by final equity
@@ -750,18 +766,19 @@ def main():
                         key=lambda s: results[symbol][s]['final_equity'])
         results[symbol]['best'] = best_strat
         results[symbol]['best_return'] = results[symbol][best_strat]['total_return_pct']
+        results[symbol]['best_htf'] = results[symbol][best_strat].get('htf_period', 0)
 
         # Print progress (compact format)
         best_ret = results[symbol][best_strat]['total_return_pct']
-        print(f"  {symbol:<8} Best: {best_strat:<15} Return: {best_ret:>+7.1f}%")
+        print(f"  {symbol:<8} Best: {best_strat:<20} Return: {best_ret:>+7.1f}%")
 
     # Categorize stocks by best strategy
-    print("\n" + "="*100)
+    print("\n" + "="*120)
     print("  OPTIMAL STRATEGY ASSIGNMENT (by Final Equity)")
-    print("="*100)
+    print("="*120)
 
     categorized = {}
-    for strat_name, _ in all_strategies:
+    for strat_name, _, _ in all_strategies:
         categorized[strat_name] = []
     categorized['GERMAN'] = german_stocks.copy()
 
@@ -769,7 +786,7 @@ def main():
         best = res['best']
         categorized[best].append(symbol)
 
-    # Print summary by strategy
+    # Print summary by strategy (only non-empty)
     for strat_name in sorted(categorized.keys()):
         tickers_list = categorized[strat_name]
         if tickers_list:
@@ -778,75 +795,119 @@ def main():
                 chunk = tickers_list[i:i+8]
                 print(f"    {', '.join(chunk)}")
 
-    # Show detailed comparison table
-    print("\n" + "="*100)
-    print("  DETAILED PERFORMANCE COMPARISON (all 12 strategies)")
-    print("="*100)
+    # HTF Period Analysis
+    print("\n" + "="*120)
+    print("  HTF PERIOD OPTIMIZATION RESULTS")
+    print("="*120)
 
-    # Header
-    header = f"  {'Symbol':<8} {'BEST':<15}"
-    for strat in base_strategies:
-        header += f" {strat[:6]:>8}"
-    header += "  HTF+"
-    for strat in base_strategies:
-        header += f" {strat[:6]:>8}"
-    print(header)
-    print("  " + "-"*96)
+    htf_counts = {0: 0}  # 0 = no HTF
+    for period in HTF_PERIODS:
+        htf_counts[period] = 0
+
+    for symbol, res in results.items():
+        htf_period = res.get('best_htf', 0)
+        if htf_period in htf_counts:
+            htf_counts[htf_period] += 1
+
+    print(f"\n  {'HTF Period':<15} {'Stocks':>10} {'Percentage':>12}")
+    print(f"  {'-'*15} {'-'*10} {'-'*12}")
+    total_stocks = len(results)
+    print(f"  {'No HTF':<15} {htf_counts[0]:>10} {htf_counts[0]/total_stocks*100:>11.1f}%")
+    for period in HTF_PERIODS:
+        print(f"  {f'HTF {period}':<15} {htf_counts[period]:>10} {htf_counts[period]/total_stocks*100:>11.1f}%")
+
+    # Show detailed comparison table (condensed)
+    print("\n" + "="*120)
+    print("  TOP PERFORMERS BY STRATEGY")
+    print("="*120)
 
     # Sort by best return
     sorted_results = sorted(results.items(),
                            key=lambda x: x[1]['best_return'],
                            reverse=True)
 
-    for symbol, res in sorted_results:
-        line = f"  {symbol:<8} {res['best']:<15}"
-        # Without HTF
-        for strat in base_strategies:
-            ret = res[strat]['total_return_pct']
-            line += f" {ret:>+7.1f}%"
-        line += "  |"
-        # With HTF
-        for strat in base_strategies:
-            ret = res[strat + '_HTF']['total_return_pct']
-            line += f" {ret:>+7.1f}%"
-        print(line)
+    print(f"\n  {'Symbol':<8} {'Best Strategy':<22} {'Return':>10} {'No HTF':>10} {'HTF50':>8} {'HTF100':>8} {'HTF150':>8} {'HTF200':>8} {'HTF250':>8}")
+    print(f"  {'-'*8} {'-'*22} {'-'*10} {'-'*10} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+
+    for symbol, res in sorted_results[:30]:  # Top 30
+        best = res['best']
+        best_ret = res['best_return']
+        base_strat = best.split('_HTF')[0]
+
+        # Get returns for this base strategy with different HTF periods
+        no_htf = res[base_strat]['total_return_pct']
+        htf_returns = []
+        for period in HTF_PERIODS:
+            key = f"{base_strat}_HTF{period}"
+            if key in res:
+                htf_returns.append(f"{res[key]['total_return_pct']:>+6.1f}%")
+            else:
+                htf_returns.append("   N/A")
+
+        print(f"  {symbol:<8} {best:<22} {best_ret:>+9.1f}% {no_htf:>+9.1f}% {' '.join(htf_returns)}")
 
     # Strategy performance summary
-    print("\n" + "="*100)
-    print("  STRATEGY PERFORMANCE SUMMARY")
-    print("="*100)
-    print(f"\n  {'Strategy':<20} {'Avg Return':>12} {'Stocks':>10} {'Best For':>10}")
-    print(f"  {'-'*20} {'-'*12} {'-'*10} {'-'*10}")
+    print("\n" + "="*120)
+    print("  STRATEGY PERFORMANCE SUMMARY (Average across all stocks)")
+    print("="*120)
 
-    for strat_name, _ in all_strategies:
-        returns = [results[s][strat_name]['total_return_pct'] for s in results]
-        avg_ret = np.mean(returns) if returns else 0
-        count = len(categorized.get(strat_name, []))
-        print(f"  {strat_name:<20} {avg_ret:>+11.1f}% {count:>10} {count:>10}")
+    print(f"\n  {'Base Strategy':<15} {'No HTF':>10}", end="")
+    for period in HTF_PERIODS:
+        print(f" {'HTF'+str(period):>8}", end="")
+    print(f" {'Best HTF':>10}")
+    print(f"  {'-'*15} {'-'*10}", end="")
+    for _ in HTF_PERIODS:
+        print(f" {'-'*8}", end="")
+    print(f" {'-'*10}")
 
-    # Update config file with simplified categories
-    print("\n" + "-"*100)
+    for base_strat in base_strategies:
+        # No HTF average
+        no_htf_returns = [results[s][base_strat]['total_return_pct'] for s in results]
+        no_htf_avg = np.mean(no_htf_returns) if no_htf_returns else 0
+
+        htf_avgs = []
+        for period in HTF_PERIODS:
+            key = f"{base_strat}_HTF{period}"
+            returns = [results[s][key]['total_return_pct'] for s in results if key in results[s]]
+            htf_avgs.append(np.mean(returns) if returns else 0)
+
+        # Find best HTF period
+        all_avgs = [no_htf_avg] + htf_avgs
+        best_idx = np.argmax(all_avgs)
+        if best_idx == 0:
+            best_htf = "No HTF"
+        else:
+            best_htf = f"HTF{HTF_PERIODS[best_idx-1]}"
+
+        print(f"  {base_strat:<15} {no_htf_avg:>+9.1f}%", end="")
+        for avg in htf_avgs:
+            print(f" {avg:>+7.1f}%", end="")
+        print(f" {best_htf:>10}")
+
+    # Update config file
+    print("\n" + "-"*120)
     print("  UPDATING stock_categories.json...")
-    print("-"*100)
+    print("-"*120)
 
     with open(CATEGORIES_FILE, 'r') as f:
         config = json.load(f)
 
-    # Create new strategy entries for all 12 strategies
+    # Create new strategy entries for strategies with stocks assigned
     new_strategies = {}
 
-    for strat_name, use_htf in all_strategies:
-        base_strat = strat_name.replace('_HTF', '')
-        base_settings = STRATEGY_SETTINGS.get(base_strat, {}).copy()
-        if use_htf:
-            base_settings['htf_filter'] = True
-            base_settings['htf_period'] = 200
+    for strat_name, use_htf, htf_period in all_strategies:
+        if categorized.get(strat_name):  # Only add if has stocks
+            base_strat = strat_name.split('_HTF')[0]
+            base_settings = STRATEGY_SETTINGS.get(base_strat, {}).copy()
+            if use_htf:
+                base_settings['htf_filter'] = True
+                base_settings['htf_period'] = htf_period
 
-        new_strategies[strat_name] = {
-            'description': f"{base_strat} {'with HTF filter (200 SMA)' if use_htf else 'without HTF filter'}",
-            'settings': base_settings,
-            'tickers': sorted(categorized.get(strat_name, []))
-        }
+            new_strategies[strat_name] = {
+                'description': f"{base_strat} {'with HTF filter (SMA ' + str(htf_period) + ')' if use_htf else 'without HTF filter'}",
+                'settings': base_settings,
+                'tickers': sorted(categorized.get(strat_name, []))
+            }
 
     # Keep GERMAN separate
     new_strategies['GERMAN'] = {
@@ -860,7 +921,7 @@ def main():
 
     config['strategies'] = new_strategies
     config['_last_updated'] = datetime.now().strftime('%Y-%m-%d')
-    config['_comment'] = f"Auto-categorized {len(results)} stocks with 12 strategies (6 base + 6 HTF)"
+    config['_comment'] = f"Auto-categorized {len(results)} stocks with optimized HTF periods ({HTF_PERIODS})"
 
     with open(CATEGORIES_FILE, 'w') as f:
         json.dump(config, f, indent=4)
@@ -869,7 +930,7 @@ def main():
 
     # Count summary
     total_assigned = 0
-    for strat_name, _ in all_strategies:
+    for strat_name, _, _ in all_strategies:
         count = len(categorized.get(strat_name, []))
         if count > 0:
             print(f"  - {strat_name}: {count} stocks")
@@ -878,16 +939,17 @@ def main():
     print(f"\n  Total: {total_assigned + len(german_stocks)} stocks categorized")
 
     # Export results to CSV
-    print("\n" + "-"*100)
+    print("\n" + "-"*120)
     print("  EXPORTING RESULTS...")
-    print("-"*100)
+    print("-"*120)
 
     export_data = []
     for symbol, res in results.items():
-        row = {'Symbol': symbol, 'Best_Strategy': res['best']}
-        for strat_name, _ in all_strategies:
-            row[f'{strat_name}_Return'] = res[strat_name]['total_return_pct']
-            row[f'{strat_name}_Equity'] = res[strat_name]['final_equity']
+        row = {'Symbol': symbol, 'Best_Strategy': res['best'], 'Best_HTF_Period': res.get('best_htf', 0)}
+        for strat_name, _, _ in all_strategies:
+            if strat_name in res:
+                row[f'{strat_name}_Return'] = res[strat_name]['total_return_pct']
+                row[f'{strat_name}_Equity'] = res[strat_name]['final_equity']
         export_data.append(row)
 
     df_export = pd.DataFrame(export_data)
@@ -896,9 +958,9 @@ def main():
     df_export.to_csv(export_file, index=False)
     print(f"  Results saved to: {export_file}")
 
-    print("\n" + "="*100)
+    print("\n" + "="*120)
     print("  DONE - Run simulation_report.py to test the new categorization")
-    print("="*100)
+    print("="*120)
 
 
 if __name__ == "__main__":
