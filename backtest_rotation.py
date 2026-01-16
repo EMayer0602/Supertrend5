@@ -291,7 +291,7 @@ class BacktestEngine:
         if len(self.positions) >= self.max_positions:
             return False
 
-        # Calculate position size (equal weight)
+        # Calculate position size: Kapital / 30 (dynamic)
         target_value = self.equity / self.max_positions
         quantity = int(target_value / price)
 
@@ -301,6 +301,7 @@ class BacktestEngine:
         cost = quantity * price + FEE_PER_TRADE
 
         if cost > self.cash:
+            # Reduce quantity if not enough cash
             quantity = int((self.cash - FEE_PER_TRADE) / price)
             if quantity <= 0:
                 return False
@@ -318,7 +319,8 @@ class BacktestEngine:
             'price': price,
             'quantity': quantity,
             'value': quantity * price,
-            'fee': FEE_PER_TRADE
+            'fee': FEE_PER_TRADE,
+            'position_size_pct': (quantity * price / self.equity) * 100
         })
 
         return True
