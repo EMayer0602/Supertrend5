@@ -992,20 +992,15 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     daily_pnl_labels = json.dumps([e['date'][-5:] for e in equity_curve[-14:]])
     daily_pnl_values = json.dumps([e.get('daily_pnl', 0) for e in equity_curve[-14:]])
 
-    # Position chart data
+    # Position chart data - already sorted by unrealized PnL from TWS
     positions = data.get('positions', [])
-    # Sort positions by PnL for the chart (all positions)
-    positions_by_pnl = sorted(positions, key=lambda p: p['unrealized_pnl'], reverse=True)
-    pos_symbols = json.dumps([p['symbol'] for p in positions_by_pnl])
-    pos_pnl = json.dumps([p['unrealized_pnl'] for p in positions_by_pnl])
-    pos_colors = json.dumps(['#00d26a' if p['unrealized_pnl'] >= 0 else '#ff4757' for p in positions_by_pnl])
+    pos_symbols = json.dumps([p['symbol'] for p in positions])
+    pos_pnl = json.dumps([p['unrealized_pnl'] for p in positions])
+    pos_colors = json.dumps(['#00d26a' if p['unrealized_pnl'] >= 0 else '#ff4757' for p in positions])
 
-    # Sort positions by entry date/time
-    positions_sorted = sorted(positions, key=lambda p: (p.get('entry_date', '') or '9999', p.get('entry_time', '') or ''), reverse=True)
-
-    # Positions table
+    # Positions table - same order as TWS (by unrealized PnL)
     positions_html = ""
-    for pos in positions_sorted:
+    for pos in positions:
         pnl_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
         # Entry date/time formatting
         entry_date = pos.get('entry_date', '')
@@ -1652,15 +1647,18 @@ def main():
     positions = data.get('positions', []) if data.get('positions') else flex_open_positions
     closed_trades = flex_closed_trades if flex_closed_trades else history.get('trades', [])
 
-    # Filter everything for 2026 only
+    # Filter closed trades for 2026 only (for statistics)
     closed_trades_2026 = [t for t in closed_trades if t.get('entry_date', '').startswith('2026')]
-    positions_2026 = [p for p in positions if p.get('entry_date', '').startswith('2026') or not p.get('entry_date')]
 
-    logger.info(f"Filtered for 2026: {len(positions_2026)} positions, {len(closed_trades_2026)} closed trades")
+    # Keep ALL positions from TWS (not filtered) - must match TWS exactly
+    # Sort by unrealized PnL descending (like TWS)
+    positions_sorted = sorted(positions, key=lambda p: p.get('unrealized_pnl', 0), reverse=True)
 
-    # Calculate equity curve from trades (2026 only)
+    logger.info(f"TWS positions: {len(positions_sorted)}, Closed trades 2026: {len(closed_trades_2026)}")
+
+    # Calculate equity curve from trades (2026 only for statistics)
     print("\nCalculating equity curve...")
-    equity_curve = calculate_equity_curve(history, positions_2026, closed_trades_2026, config)
+    equity_curve = calculate_equity_curve(history, positions_sorted, closed_trades_2026, config)
 
     # Filter equity curve to only include 2026 dates
     equity_curve = [e for e in equity_curve if e.get('date', '').startswith('2026')]
@@ -1668,12 +1666,13 @@ def main():
     # Calculate metrics (2026 only)
     metrics = calculate_performance_metrics(equity_curve, closed_trades_2026, config)
 
-    # Update data with 2026 filtered positions but keep TWS account values
+    # Keep TWS account values and use all positions (not filtered)
     tws_net_liq = data['account'].get('NetLiquidation', 0)
     tws_unrealized = data.get('total_unrealized_pnl', 0)
     tws_daily = data.get('daily_pnl', 0)
 
-    data['positions'] = positions_2026
+    # Use ALL positions from TWS (sorted by unrealized PnL)
+    data['positions'] = positions_sorted
 
     # Restore TWS values (don't overwrite with calculated values)
     data['account']['NetLiquidation'] = tws_net_liq
@@ -1699,7 +1698,7 @@ def main():
     print(f"{'='*60}")
     print(f"  Kapital:           ${metrics['current_capital']:,.2f}")
     print(f"  Total Return:      ${metrics['total_return']:+,.2f} ({metrics['total_return_pct']:+.1f}%)")
-    print(f"  Open Positions:    {len(positions_2026)} (2026)")
+    print(f"  Open Positions:    {len(positions_sorted)} (TWS)")
     print(f"  Closed Trades:     {len(closed_trades_2026)} (2026)")
     print(f"  Win Rate:          {metrics['win_rate']}%")
     print(f"  Profit Factor:     {metrics['profit_factor']}")
