@@ -1,0 +1,250 @@
+{
+    "_comment": "Auto-categorized 59 stocks with optimized HTF periods ([50, 100, 150, 200, 250])",
+    "_last_updated": "2026-01-16 23:00",
+    "strategies": {
+        "SUPERTREND": {
+            "description": "SUPERTREND without HTF filter",
+            "settings": {
+                "st_period": 10,
+                "st_multiplier": 2.0,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": [
+                "AMZN",
+                "DKNG",
+                "PDYN",
+                "AAPL",
+                "ADBE",
+                "AFRM",
+                "AMD",
+                "ARM",
+                "AVGO",
+                "BABA",
+                "COIN",
+                "CRM",
+                "CRWD",
+                "DIA",
+                "DRH",
+                "GOOGL",
+                "HOOD",
+                "INOD",
+                "IWM",
+                "JPM",
+                "LCID",
+                "LLY",
+                "MA",
+                "META",
+                "MRK",
+                "MRNA",
+                "MSFT",
+                "MSTR",
+                "MU",
+                "NFLX",
+                "NIO",
+                "NKE",
+                "NOW",
+                "NVDA",
+                "ORCL",
+                "PANW",
+                "PFE",
+                "PLTR",
+                "PYPL",
+                "QBTS",
+                "QUBT",
+                "RIVN",
+                "SHOP",
+                "SMCI",
+                "SNOW",
+                "SOFI",
+                "TGT",
+                "TSLA",
+                "UBER",
+                "UNH",
+                "UPST",
+                "V",
+                "XLF",
+                "XLK"
+            ]
+        },
+        "KAMA": {
+            "description": "KAMA without HTF filter",
+            "settings": {
+                "kama_period": 10,
+                "kama_fast": 2,
+                "kama_slow": 30,
+                "signal_period": 10,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": []
+        },
+        "JMA": {
+            "description": "JMA without HTF filter",
+            "settings": {
+                "jma_period": 7,
+                "jma_phase": 50,
+                "signal_period": 21,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": []
+        },
+        "SMA": {
+            "description": "SMA without HTF filter",
+            "settings": {
+                "sma_fast": 20,
+                "sma_slow": 50,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": []
+        },
+        "EMA": {
+            "description": "EMA without HTF filter",
+            "settings": {
+                "ema_fast": 12,
+                "ema_slow": 26,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": []
+        },
+        "SUPERTREND_HTF50": {
+            "description": "SUPERTREND with HTF filter (SMA 50)",
+            "settings": {
+                "st_period": 10,
+                "st_multiplier": 2.0,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 50
+            },
+            "tickers": []
+        },
+        "SUPERTREND_HTF100": {
+            "description": "SUPERTREND with HTF filter (SMA 100)",
+            "settings": {
+                "st_period": 10,
+                "st_multiplier": 2.0,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 100
+            },
+            "tickers": []
+        },
+        "SUPERTREND_HTF150": {
+            "description": "SUPERTREND with HTF filter (SMA 150)",
+            "settings": {
+                "st_period": 10,
+                "st_multiplier": 2.0,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 150
+            },
+            "tickers": []
+        },
+        "SUPERTREND_HTF200": {
+            "description": "SUPERTREND with HTF filter (SMA 200)",
+            "settings": {
+                "st_period": 10,
+                "st_multiplier": 2.0,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 200
+            },
+            "tickers": []
+        },
+        "KAMA_HTF50": {
+            "description": "KAMA with HTF filter (SMA 50)",
+            "settings": {
+                "kama_period": 10,
+                "kama_fast": 2,
+                "kama_slow": 30,
+                "signal_period": 10,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 50
+            },
+            "tickers": []
+        },
+        "KAMA_HTF100": {
+            "description": "KAMA with HTF filter (SMA 100)",
+            "settings": {
+                "kama_period": 10,
+                "kama_fast": 2,
+                "kama_slow": 30,
+                "signal_period": 10,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 100
+            },
+            "tickers": []
+        },
+        "KAMA_HTF150": {
+            "description": "KAMA with HTF filter (SMA 150)",
+            "settings": {
+                "kama_period": 10,
+                "kama_fast": 2,
+                "kama_slow": 30,
+                "signal_period": 10,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 150
+            },
+            "tickers": []
+        },
+        "SMA_HTF50": {
+            "description": "SMA with HTF filter (SMA 50)",
+            "settings": {
+                "sma_fast": 20,
+                "sma_slow": 50,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 50
+            },
+            "tickers": []
+        },
+        "SMA_HTF100": {
+            "description": "SMA with HTF filter (SMA 100)",
+            "settings": {
+                "sma_fast": 20,
+                "sma_slow": 50,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 100
+            },
+            "tickers": []
+        },
+        "EMA_HTF50": {
+            "description": "EMA with HTF filter (SMA 50)",
+            "settings": {
+                "ema_fast": 12,
+                "ema_slow": 26,
+                "trailing_stop_pct": 0.12,
+                "htf_filter": true,
+                "htf_period": 50
+            },
+            "tickers": []
+        },
+        "GERMAN": {
+            "description": "German stocks (IBIS/EUR)",
+            "settings": {
+                "st_period": 10,
+                "st_multiplier": 2.0,
+                "trailing_stop_pct": 0.12
+            },
+            "tickers": [
+                "TKMS"
+            ]
+        },
+        "EXCLUDED": {
+            "description": "Excluded stocks",
+            "tickers": []
+        }
+    },
+    "ticker_settings": {
+        "TKMS": {
+            "exchange": "IBIS",
+            "currency": "EUR"
+        }
+    },
+    "watchlist": {
+        "description": "Stocks to monitor",
+        "tickers": []
+    }
+}

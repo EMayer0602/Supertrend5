@@ -1,0 +1,189 @@
+{
+  "positions": {
+    "AMD": {
+      "avg_cost": 239.8498125,
+      "highest_price": 239.8498125
+    },
+    "PFE": {
+      "avg_cost": 25.655,
+      "highest_price": 25.73
+    },
+    "NVDA": {
+      "avg_cost": 181.32205925,
+      "highest_price": 189.49
+    },
+    "PDYN": {
+      "avg_cost": 6.62266215,
+      "highest_price": 7.09
+    },
+    "UBER": {
+      "avg_cost": 84.51533445,
+      "highest_price": 84.51533445
+    },
+    "AVGO": {
+      "avg_cost": 338.48333335,
+      "highest_price": 346.38
+    },
+    "SHOP": {
+      "avg_cost": 166.99657895,
+      "highest_price": 166.99657895
+    },
+    "MRK": {
+      "avg_cost": 110.125,
+      "highest_price": 110.91
+    },
+    "COIN": {
+      "avg_cost": 269.8705778,
+      "highest_price": 269.8705778
+    },
+    "CRWD": {
+      "avg_cost": 473.4188679,
+      "highest_price": 473.4188679
+    },
+    "QUBT": {
+      "avg_cost": 9.34502205,
+      "highest_price": 12.9303
+    },
+    "PYPL": {
+      "avg_cost": 59.885,
+      "highest_price": 59.885
+    },
+    "JPM": {
+      "avg_cost": 329.782987,
+      "highest_price": 329.782987
+    },
+    "TGT": {
+      "avg_cost": 104.635,
+      "highest_price": 111.04
+    },
+    "TSLA": {
+      "avg_cost": 440.38754385,
+      "highest_price": 443.47
+    },
+    "NFLX": {
+      "avg_cost": 91.655,
+      "highest_price": 91.655
+    },
+    "MRNA": {
+      "avg_cost": 34.75431785,
+      "highest_price": 41.86
+    },
+    "MU": {
+      "avg_cost": 342.7735135,
+      "highest_price": 357.3
+    },
+    "QQQ": {
+      "avg_cost": 623.215,
+      "highest_price": 626.01
+    },
+    "MSTR": {
+      "avg_cost": 164.3264935,
+      "highest_price": 175.0
+    },
+    "INOD": {
+      "avg_cost": 63.0334733,
+      "highest_price": 63.27
+    },
+    "NKE": {
+      "avg_cost": 64.94265305,
+      "highest_price": 64.94265305
+    },
+    "SPY": {
+      "avg_cost": 692.2177778,
+      "highest_price": 695.03
+    },
+    "META": {
+      "avg_cost": 657.4963158,
+      "highest_price": 657.4963158
+    },
+    "DKNG": {
+      "avg_cost": 34.83279615,
+      "highest_price": 34.83279615
+    },
+    "CRM": {
+      "avg_cost": 259.2602041,
+      "highest_price": 259.2602041
+    }
+  },
+  "signals": {
+    "AMD": "BUY",
+    "PFE": "BUY",
+    "NVDA": "BUY",
+    "PDYN": "BUY",
+    "UBER": "BUY",
+    "AVGO": "BUY",
+    "SHOP": "BUY",
+    "MRK": "BUY",
+    "COIN": "BUY",
+    "CRWD": "BUY",
+    "QUBT": "BUY",
+    "PYPL": "BUY",
+    "JPM": "BUY",
+    "TGT": "BUY",
+    "TSLA": "BUY",
+    "NFLX": "BUY",
+    "TKMS": "BUY",
+    "MRNA": "BUY",
+    "MU": "BUY",
+    "QQQ": "BUY",
+    "UNH": "BUY",
+    "MSTR": "BUY",
+    "INOD": "BUY",
+    "NKE": "BUY",
+    "DRH": "BUY",
+    "SPY": "BUY",
+    "QBTS": "BUY",
+    "PLTR": "BUY",
+    "META": "BUY",
+    "JNJ": "BUY",
+    "LLY": "BUY",
+    "SNOW": "BUY",
+    "DIA": "BUY",
+    "IWM": "BUY",
+    "ADBE": "BUY",
+    "LCID": "BUY",
+    "ORCL": "BUY",
+    "MSFT": "BUY",
+    "RIVN": "BUY",
+    "BABA": "BUY",
+    "SMCI": "BUY",
+    "AAPL": "BUY",
+    "V": "BUY",
+    "MA": "BUY",
+    "NOW": "BUY",
+    "NIO": "BUY",
+    "DKNG": "BUY",
+    "SOFI": "BUY",
+    "ARM": "BUY",
+    "AMZN": "BUY",
+    "CRM": "BUY",
+    "VTI": "BUY",
+    "XLK": "BUY",
+    "GOOGL": "BUY",
+    "VOO": "BUY",
+    "UPST": "BUY",
+    "HOOD": "BUY",
+    "PANW": "BUY",
+    "XLF": "BUY",
+    "AFRM": "BUY"
+  },
+  "trade_log": [
+    {
+      "timestamp": "2026-01-16T16:28:45.371831",
+      "symbol": "COIN",
+      "action": "SELL",
+      "quantity": 36,
+      "order_type": "LMT",
+      "status": "PendingSubmit"
+    },
+    {
+      "timestamp": "2026-01-16T16:28:48.660968",
+      "symbol": "CRM",
+      "action": "SELL",
+      "quantity": 98,
+      "order_type": "LMT",
+      "status": "Submitted"
+    }
+  ],
+  "last_update": "2026-01-17T00:34:15.823336"
+}

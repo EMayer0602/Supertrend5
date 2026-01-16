@@ -1,0 +1,109 @@
+Fertig! Hier ist die Zusammenfassung:
+
+Auf deinem Windows-PC:
+cd C:\Users\Edgar.000\Supertrend5
+git pull
+
+FlexQuery aktivieren (einmalig):
+1. Im IB Account Management:
+Gehe zu: https://www.interactivebrokers.com/sso/Login
+
+Reports → Flex Queries → Create
+
+Erstelle "Trade" Query mit Feldern:
+
+Trade Date/Time, Symbol, Buy/Sell
+Quantity, Price, Commission, Realized P&L
+Settings → Flex Web Service → Aktivieren
+
+Kopiere Token und Query ID
+
+2. Setup ausführen:
+python generate_dashboard.py --setup-flex
+
+→ Token und Query ID eingeben
+
+Kapitalberechnung (deine Formel):
+Startkapital     = 50000
+Beim Kauf        = -entry_fee ($1)
+Jeden Tag        = amount * (current_price - entry_price)
+Beim Verkauf     = amount * (exit_price - entry_price) - exit_fee
+Kapital[t]       = Kapital[t-1] + Σ(PnL)
+
+Dashboard generieren:
+python generate_dashboard.py           # Normal
+python generate_dashboard.py --live    # Auto-refresh (30s)
+
+Die Trade-History kommt jetzt von FlexQuery - du brauchst keinen 24h laufenden PC mehr!
+
+wie finde ich reports? das gaze i ndeutsch bitte
+
+FlexQuery Aktivierung - Schritt für Schritt (Deutsch)
+1. Einloggen
+Gehe zu: https://www.interactivebrokers.com/sso/Login
+
+Login mit deinen IB-Zugangsdaten
+
+2. FlexQuery Report erstellen
+Nach dem Login siehst du das Account Management (Kontoverwaltung).
+
+Navigation:
+
+Menü → Performance & Berichte → Flex-Abfragen
+
+oder auf Englisch:
+
+Menu → Performance & Reports → Flex Queries
+
+Falls du es nicht findest:
+
+Oben rechts gibt es eine Suchleiste (Lupe)
+Tippe ein: "Flex"
+Klicke auf "Flex-Abfragen" oder "Flex Queries"
+3. Neue Abfrage erstellen
+Klicke auf "Erstellen" oder "Create"
+
+Wähle "Aktivitäts-Flex-Abfrage" (Activity Flex Query)
+
+Name: z.B. Trades
+
+Wähle diese Felder aus:
+
+✅ Handelsdatum (Trade Date)
+✅ Symbol
+✅ Kauf/Verkauf (Buy/Sell)
+✅ Menge (Quantity)
+✅ Preis (Price)
+✅ Provision (Commission)
+✅ Realisierter G&V (Realized P&L)
+Speichern → Notiere die Query ID (Abfrage-ID)
+
+4. Flex Web Service aktivieren
+Menü → Einstellungen → Benutzereinstellungen → Flex Web Service
+
+oder suche nach "Flex Web Service"
+
+Aktivieren anklicken
+Token kopieren (das ist ein langer Code)
+5. In deinem Script eingeben
+python generate_dashboard.py --setup-flex
+
+Dann eingeben:
+
+Token: (den langen Code von Schritt 4)
+Query ID: (die Nummer von Schritt 3)
+Screenshot-Hilfe
+Falls du mir einen Screenshot schickst von deiner Account Management Seite, kann ich dir genau zeigen wo du klicken musst!
+
+
+Create PR
+
+
+
+Aktiver Prüfcode
+Aktiver Prüfcode
+323539617302851787292758
+Aktivierungszeitraum:
+2026-01-15, 05:13:36 EST — 2026-12-17, 05:13:36 EST
+Gültig für die IP-Adresse
+---

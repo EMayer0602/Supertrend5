@@ -1,0 +1,27 @@
+SIMULATION SUMMARY
+==================================================
+
+initial_capital: 20000
+final_equity: 27987.439999999988
+total_return: 7987.439999999988
+total_return_pct: 39.93719999999994
+total_fees: 242.0
+total_trades: 106
+winning_trades: 51
+losing_trades: 55
+win_rate: 48.113207547169814
+total_profit: 9715.930000000004
+total_loss: -4588.24
+avg_win: 190.508431372549
+avg_loss: -83.42254545454546
+avg_win_pct: 27.696922226144284
+avg_loss_pct: -9.387019084980782
+largest_win: 991.1400000000001
+largest_loss: -161.61999999999995
+avg_holding_days: 48.95283018867924
+profit_factor: 2.1175723153104467
+max_drawdown_pct: 13.4491614711647
+sharpe_ratio: 1.8635039193220952
+sortino_ratio: 2.4586903496713113
+open_positions: 30
+unrealized_pnl: 2889.749999999999
