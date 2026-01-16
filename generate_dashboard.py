@@ -1052,26 +1052,52 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
     # Positions table - same order as TWS (by Daily PnL)
     positions_html = ""
     for pos in positions:
-        daily_class = "positive" if pos.get('daily_pnl', 0) >= 0 else "negative"
-        unrealized_class = "positive" if pos['unrealized_pnl'] >= 0 else "negative"
-        realized_class = "positive" if pos.get('realized_pnl', 0) >= 0 else "negative"
-        pnl_class = "positive" if pos['pnl_pct'] >= 0 else "negative"
+        daily_pnl = pos.get('daily_pnl', 0)
+        unrealized_pnl = pos.get('unrealized_pnl', 0)
+        realized_pnl = pos.get('realized_pnl', 0)
+
+        # Handle NaN values
+        if math.isnan(daily_pnl) if isinstance(daily_pnl, float) else False:
+            daily_pnl = 0
+        if math.isnan(unrealized_pnl) if isinstance(unrealized_pnl, float) else False:
+            unrealized_pnl = 0
+        if math.isnan(realized_pnl) if isinstance(realized_pnl, float) else False:
+            realized_pnl = 0
+
+        daily_class = "positive" if daily_pnl >= 0 else "negative"
+        unrealized_class = "positive" if unrealized_pnl >= 0 else "negative"
+        realized_class = "positive" if realized_pnl >= 0 else "negative"
+        pnl_class = "positive" if pos.get('pnl_pct', 0) >= 0 else "negative"
 
         # Show realized only if non-zero
-        realized_pnl = pos.get('realized_pnl', 0)
         realized_str = f"${realized_pnl:+,.0f}" if realized_pnl != 0 else ""
+
+        # Entry date/time
+        entry_date = pos.get('entry_date', '')
+        entry_time = pos.get('entry_time', '')
+        if entry_date:
+            if len(entry_date) == 8 and entry_date.isdigit():
+                entry_date = f"{entry_date[4:6]}/{entry_date[6:8]}"
+            elif '-' in entry_date:
+                parts = entry_date.split('-')
+                entry_date = f"{parts[1]}/{parts[2]}" if len(parts) == 3 else entry_date
+        if entry_time and len(entry_time) >= 4:
+            entry_datetime = f"{entry_date} {entry_time[:2]}:{entry_time[2:4]}"
+        else:
+            entry_datetime = entry_date or ""
 
         positions_html += f"""
         <tr>
-            <td class="{daily_class}"><strong>${pos.get('daily_pnl', 0):+,.0f}</strong></td>
+            <td class="{daily_class}"><strong>${daily_pnl:+,.0f}</strong></td>
             <td><strong>{pos['symbol']}</strong></td>
             <td>{pos['quantity']}</td>
             <td>${pos.get('market_value', 0):,.0f}</td>
             <td>${pos['entry_price']:,.2f}</td>
             <td>${pos['current_price']:,.2f}</td>
-            <td class="{unrealized_class}">${pos['unrealized_pnl']:+,.0f}</td>
+            <td>{entry_datetime}</td>
+            <td class="{unrealized_class}">${unrealized_pnl:+,.0f}</td>
             <td class="{realized_class}">{realized_str}</td>
-            <td class="{pnl_class}">{pos['pnl_pct']:+.2f}%</td>
+            <td class="{pnl_class}">{pos.get('pnl_pct', 0):+.2f}%</td>
         </tr>
         """
 
@@ -1448,13 +1474,14 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
                     <th>MKT VAL</th>
                     <th>AVG PX</th>
                     <th>LAST</th>
+                    <th>ENTRY</th>
                     <th>UNRLZD</th>
                     <th>RLZD</th>
                     <th>CHNG</th>
                 </tr>
             </thead>
             <tbody>
-                {positions_html if positions_html else '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
+                {positions_html if positions_html else '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-secondary);">No open positions</td></tr>'}
             </tbody>
         </table>
     </div>
