@@ -471,28 +471,7 @@ def create_portfolio_table_html(portfolio, categories=None):
         <tbody>
     """
 
-    # Total row first (like TWS)
-    total_pnl_class = "cell-positive" if total_daily_pnl >= 0 else "cell-negative"
-    total_unrlz_class = "cell-positive" if total_unrealized >= 0 else "cell-negative"
-    total_pnl_str = f"{total_daily_pnl:+,.0f}" if total_daily_pnl != 0 else "0"
-    total_unrlz_str = f"{total_unrealized:+,.0f}" if total_unrealized != 0 else "0"
-
-    html += f"""
-        <tr class="total-row">
-            <td class="{total_pnl_class}">{total_pnl_str}</td>
-            <td class="symbol-cell">TOTAL Stocks</td>
-            <td>-</td>
-            <td>{total_qty:,.0f}</td>
-            <td>{total_mkt_value:,.0f}</td>
-            <td>-</td>
-            <td>-</td>
-            <td class="{total_unrlz_class}">{total_unrlz_str}</td>
-            <td>-</td>
-            <td>-</td>
-        </tr>
-    """
-
-    # Individual positions
+    # Individual positions FIRST
     for p in portfolio_sorted:
         pnl_class = "cell-positive" if p['daily_pnl'] >= 0 else "cell-negative"
         unrlz_class = "cell-positive" if p['unrealized_pnl'] >= 0 else "cell-negative"
@@ -528,6 +507,27 @@ def create_portfolio_table_html(portfolio, categories=None):
                 <td class="{signal_class}">{signal}</td>
             </tr>
         """
+
+    # Total row LAST (at bottom)
+    total_pnl_class = "cell-positive" if total_daily_pnl >= 0 else "cell-negative"
+    total_unrlz_class = "cell-positive" if total_unrealized >= 0 else "cell-negative"
+    total_pnl_str = f"{total_daily_pnl:+,.0f}" if total_daily_pnl != 0 else "0"
+    total_unrlz_str = f"{total_unrealized:+,.0f}" if total_unrealized != 0 else "0"
+
+    html += f"""
+        <tr class="total-row">
+            <td class="{total_pnl_class}">{total_pnl_str}</td>
+            <td class="symbol-cell">TOTAL Stocks</td>
+            <td>-</td>
+            <td>{total_qty:,.0f}</td>
+            <td>{total_mkt_value:,.0f}</td>
+            <td>-</td>
+            <td>-</td>
+            <td class="{total_unrlz_class}">{total_unrlz_str}</td>
+            <td>-</td>
+            <td>-</td>
+        </tr>
+    """
 
     html += """
         </tbody>
