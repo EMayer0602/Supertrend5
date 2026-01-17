@@ -260,6 +260,84 @@ def calculate_supertrend_vectorized(high: np.ndarray, low: np.ndarray, close: np
 
 
 # =============================================================================
+# MOVING AVERAGE INDICATORS (JMA, KAMA, SMA, EMA)
+# =============================================================================
+
+def calculate_jma(series: pd.Series, period: int = 7, phase: int = 50) -> pd.Series:
+    """Calculate Jurik Moving Average (JMA)"""
+    phase_ratio = (phase + 100) / 200
+    beta = 0.45 * (period - 1) / (0.45 * (period - 1) + 2)
+    alpha = beta ** 3
+
+    jma = pd.Series(index=series.index, dtype=float)
+    jma.iloc[0] = series.iloc[0]
+
+    e0 = series.iloc[0]
+    e1 = 0
+    e2 = 0
+
+    for i in range(1, len(series)):
+        e0 = (1 - alpha) * series.iloc[i] + alpha * e0
+        e1 = (series.iloc[i] - e0) * (1 - beta) + beta * e1
+        e2 = (e0 + phase_ratio * e1 - jma.iloc[i-1]) * ((1 - alpha) ** 2) + (alpha ** 2) * e2
+        jma.iloc[i] = jma.iloc[i-1] + e2
+
+    return jma
+
+
+def calculate_kama(series: pd.Series, period: int = 10, fast: int = 2, slow: int = 30) -> pd.Series:
+    """Calculate Kaufman Adaptive Moving Average (KAMA)"""
+    change = abs(series - series.shift(period))
+    volatility = abs(series - series.shift(1)).rolling(window=period).sum()
+
+    er = change / volatility
+    er = er.fillna(0)
+
+    fast_sc = 2 / (fast + 1)
+    slow_sc = 2 / (slow + 1)
+    sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+
+    kama = pd.Series(index=series.index, dtype=float)
+    kama.iloc[period-1] = series.iloc[period-1]
+
+    for i in range(period, len(series)):
+        kama.iloc[i] = kama.iloc[i-1] + sc.iloc[i] * (series.iloc[i] - kama.iloc[i-1])
+
+    return kama
+
+
+def calculate_sma(series: pd.Series, period: int) -> pd.Series:
+    """Calculate Simple Moving Average"""
+    return series.rolling(window=period).mean()
+
+
+def calculate_ema(series: pd.Series, period: int) -> pd.Series:
+    """Calculate Exponential Moving Average"""
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def get_ma_crossover_signals(close: np.ndarray, fast_ma: np.ndarray, slow_ma: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate buy/sell signals from MA crossover"""
+    n = len(close)
+    buy_signals = np.zeros(n, dtype=bool)
+    sell_signals = np.zeros(n, dtype=bool)
+
+    for i in range(1, n):
+        if np.isnan(fast_ma[i]) or np.isnan(slow_ma[i]):
+            continue
+        if np.isnan(fast_ma[i-1]) or np.isnan(slow_ma[i-1]):
+            continue
+        # Buy when fast crosses above slow
+        if fast_ma[i] > slow_ma[i] and fast_ma[i-1] <= slow_ma[i-1]:
+            buy_signals[i] = True
+        # Sell when fast crosses below slow
+        elif fast_ma[i] < slow_ma[i] and fast_ma[i-1] >= slow_ma[i-1]:
+            sell_signals[i] = True
+
+    return buy_signals, sell_signals
+
+
+# =============================================================================
 # HTF (HIGHER TIME FRAME) FILTER
 # =============================================================================
 def resample_to_weekly(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -1397,15 +1475,32 @@ def main():
 
 
 # =============================================================================
-# MULTI-TICKER ANALYSIS
+# MULTI-TICKER ANALYSIS - TEST ALL STRATEGIES
 # =============================================================================
+
+def test_strategy_return(stock_data: pd.DataFrame, buy_signals: np.ndarray, sell_signals: np.ndarray,
+                         config: TradingConfig, system) -> float:
+    """Helper: calculate return for a given signal set"""
+    try:
+        long_trades, _ = system.generate_trades(stock_data, buy_signals, sell_signals, long_only=True)
+        if len(long_trades) < 2:
+            return -np.inf
+        _, _, combined_eq, _ = system.calculate_equity_curve_vectorized(stock_data, long_trades, [])
+        return (combined_eq[-1] - config.initial_capital) / config.initial_capital
+    except:
+        return -np.inf
+
+
 def test_ticker(symbol: str, days_back: int = 365) -> Dict:
-    """Test a single ticker and return results"""
+    """
+    Test a single ticker with ALL strategies and find the best one.
+    Strategies: SUPERTREND, JMA, KAMA, EMA, SMA, BUYHOLD
+    """
     config = TradingConfig(
         symbol=symbol,
         initial_capital=10000.0,
         days_back=days_back,
-        use_htf_filter=True
+        use_htf_filter=False
     )
 
     try:
@@ -1422,63 +1517,154 @@ def test_ticker(symbol: str, days_back: int = 365) -> Dict:
         high = stock_data[high_col].values
         low = stock_data[low_col].values
         close = stock_data[close_col].values
+        close_series = stock_data[close_col]
 
         buy_hold_return = (close[-1] - close[0]) / close[0]
 
-        # Quick optimization - test key parameter combinations
         system = OptimizedTradingSystem(config)
-        rsi = calculate_rsi(close, 14)
 
-        best_return = -np.inf
-        best_params = None
+        # Track best result per strategy
+        strategy_results = {}
 
-        # Test combinations
-        for period in [10, 15, 20, 25]:
-            for mult in [3.0, 4.0, 5.0, 6.0]:
-                for use_rsi in [True, False]:
-                    try:
-                        supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
-                        buy_signals, sell_signals = generate_signals_vectorized(close, supertrend, direction, None, False, "exit_only")
+        # =================================================================
+        # 1. SUPERTREND Strategy
+        # =================================================================
+        best_st_return = -np.inf
+        best_st_params = None
+        for period in [10, 14, 20]:
+            for mult in [2.0, 3.0, 4.0]:
+                try:
+                    supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
+                    buy_signals, sell_signals = generate_signals_vectorized(close, supertrend, direction, None, False, "exit_only")
+                    ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                    if ret > best_st_return:
+                        best_st_return = ret
+                        best_st_params = {'period': period, 'multiplier': mult}
+                except:
+                    pass
+        if best_st_return > -np.inf:
+            strategy_results['SUPERTREND'] = {'return': best_st_return, 'params': best_st_params}
 
-                        rsi_arr = rsi if use_rsi else None
-                        long_trades, _ = system.generate_trades(stock_data, buy_signals, sell_signals, long_only=True, rsi=rsi_arr)
+        # =================================================================
+        # 2. JMA Strategy (JMA crossover)
+        # =================================================================
+        best_jma_return = -np.inf
+        best_jma_params = None
+        for fast in [7, 10, 14]:
+            for slow in [21, 30, 50]:
+                if fast >= slow:
+                    continue
+                try:
+                    jma_fast = calculate_jma(close_series, fast).values
+                    jma_slow = calculate_jma(close_series, slow).values
+                    buy_signals, sell_signals = get_ma_crossover_signals(close, jma_fast, jma_slow)
+                    ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                    if ret > best_jma_return:
+                        best_jma_return = ret
+                        best_jma_params = {'fast': fast, 'slow': slow}
+                except:
+                    pass
+        if best_jma_return > -np.inf:
+            strategy_results['JMA'] = {'return': best_jma_return, 'params': best_jma_params}
 
-                        if len(long_trades) < 2:
-                            continue
+        # =================================================================
+        # 3. KAMA Strategy (KAMA crossover with SMA signal)
+        # =================================================================
+        best_kama_return = -np.inf
+        best_kama_params = None
+        for period in [10, 14, 20]:
+            for signal in [10, 14, 21]:
+                try:
+                    kama = calculate_kama(close_series, period).values
+                    signal_line = calculate_sma(close_series, signal).values
+                    buy_signals, sell_signals = get_ma_crossover_signals(close, kama, signal_line)
+                    ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                    if ret > best_kama_return:
+                        best_kama_return = ret
+                        best_kama_params = {'period': period, 'signal': signal}
+                except:
+                    pass
+        if best_kama_return > -np.inf:
+            strategy_results['KAMA'] = {'return': best_kama_return, 'params': best_kama_params}
 
-                        _, _, combined_eq, _ = system.calculate_equity_curve_vectorized(stock_data, long_trades, [])
-                        total_return = (combined_eq[-1] - config.initial_capital) / config.initial_capital
+        # =================================================================
+        # 4. EMA Strategy (EMA crossover)
+        # =================================================================
+        best_ema_return = -np.inf
+        best_ema_params = None
+        for fast in [8, 12, 20]:
+            for slow in [21, 26, 50]:
+                if fast >= slow:
+                    continue
+                try:
+                    ema_fast = calculate_ema(close_series, fast).values
+                    ema_slow = calculate_ema(close_series, slow).values
+                    buy_signals, sell_signals = get_ma_crossover_signals(close, ema_fast, ema_slow)
+                    ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                    if ret > best_ema_return:
+                        best_ema_return = ret
+                        best_ema_params = {'fast': fast, 'slow': slow}
+                except:
+                    pass
+        if best_ema_return > -np.inf:
+            strategy_results['EMA'] = {'return': best_ema_return, 'params': best_ema_params}
 
-                        if total_return > best_return:
-                            best_return = total_return
-                            best_params = {'period': period, 'mult': mult, 'use_rsi': use_rsi, 'trades': len(long_trades)}
-                    except:
-                        pass
+        # =================================================================
+        # 5. SMA Strategy (SMA crossover)
+        # =================================================================
+        best_sma_return = -np.inf
+        best_sma_params = None
+        for fast in [10, 20, 30]:
+            for slow in [50, 100, 200]:
+                if fast >= slow:
+                    continue
+                try:
+                    sma_fast = calculate_sma(close_series, fast).values
+                    sma_slow = calculate_sma(close_series, slow).values
+                    buy_signals, sell_signals = get_ma_crossover_signals(close, sma_fast, sma_slow)
+                    ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                    if ret > best_sma_return:
+                        best_sma_return = ret
+                        best_sma_params = {'fast': fast, 'slow': slow}
+                except:
+                    pass
+        if best_sma_return > -np.inf:
+            strategy_results['SMA'] = {'return': best_sma_return, 'params': best_sma_params}
 
-        beats_bh = best_return > buy_hold_return if best_params else False
+        # =================================================================
+        # Find best strategy overall
+        # =================================================================
+        best_strategy = 'BUYHOLD'
+        best_return = buy_hold_return
+        best_params = {}
 
-        # Assign strategy: if Supertrend beats B&H use it, otherwise use BUYHOLD
-        if beats_bh and best_params:
-            assigned_strategy = 'SUPERTREND'
-            assigned_params = best_params
-            assigned_return = best_return
-        else:
-            assigned_strategy = 'BUYHOLD'
-            assigned_params = {}
-            assigned_return = buy_hold_return
+        for strat_name, strat_data in strategy_results.items():
+            if strat_data['return'] > best_return:
+                best_return = strat_data['return']
+                best_strategy = strat_name
+                best_params = strat_data['params']
+
+        # Check if any strategy beats B&H
+        beats_bh = best_return > buy_hold_return and best_strategy != 'BUYHOLD'
+
+        # Compile all strategy returns for reference
+        all_returns = {name: data['return'] for name, data in strategy_results.items()}
+        all_returns['BUYHOLD'] = buy_hold_return
 
         return {
             'symbol': symbol,
             'buy_hold': buy_hold_return,
-            'strategy_return': best_return,
-            'outperformance': best_return - buy_hold_return if best_params else None,
+            'strategy_return': best_return if best_strategy != 'BUYHOLD' else best_return,
+            'outperformance': best_return - buy_hold_return if beats_bh else 0,
             'beats_bh': beats_bh,
             'params': best_params,
             'data_days': len(stock_data),
-            # Assignment based on B&H comparison
-            'assigned_strategy': assigned_strategy,
-            'assigned_params': assigned_params,
-            'assigned_return': assigned_return
+            # Assignment - best strategy
+            'assigned_strategy': best_strategy,
+            'assigned_params': best_params,
+            'assigned_return': best_return,
+            # All strategy results
+            'all_strategies': all_returns
         }
     except Exception as e:
         return {'symbol': symbol, 'error': str(e)}
@@ -1537,39 +1723,60 @@ def run_multi_ticker_analysis():
 
     # Summary
     print("\n" + "="*80)
-    print("SUMMARY")
+    print("SUMMARY - ALL STRATEGIES")
     print("="*80)
 
     valid_results = [r for r in all_results if 'error' not in r]
     beating_bh = [r for r in valid_results if r['beats_bh']]
-    supertrend_assigned = [r for r in valid_results if r.get('assigned_strategy') == 'SUPERTREND']
-    buyhold_assigned = [r for r in valid_results if r.get('assigned_strategy') == 'BUYHOLD']
+
+    # Count assignments by strategy
+    strategy_counts = {}
+    for r in valid_results:
+        strat = r.get('assigned_strategy', 'UNKNOWN')
+        strategy_counts[strat] = strategy_counts.get(strat, 0) + 1
 
     print(f"\nTotal tickers tested: {len(valid_results)}")
     print(f"Strategies that BEAT Buy & Hold: {len(beating_bh)} ({100*len(beating_bh)/len(valid_results):.1f}%)")
-    print(f"\nAssignments:")
-    print(f"  SUPERTREND: {len(supertrend_assigned)} symbols")
-    print(f"  BUYHOLD:    {len(buyhold_assigned)} symbols")
+
+    print(f"\n--- STRATEGY ASSIGNMENTS ---")
+    for strat in ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA', 'BUYHOLD']:
+        count = strategy_counts.get(strat, 0)
+        pct = 100 * count / len(valid_results) if valid_results else 0
+        print(f"  {strat:<12}: {count:3d} symbols ({pct:4.1f}%)")
 
     if beating_bh:
-        print("\n--- SUPERTREND WINNERS (Beat Buy & Hold) ---")
+        print("\n--- TOP PERFORMERS (Beat Buy & Hold) ---")
         beating_bh.sort(key=lambda x: x['outperformance'] or 0, reverse=True)
-        for r in beating_bh[:20]:  # Top 20
+        for r in beating_bh[:25]:  # Top 25
             strat_ret = r.get('strategy_return', 0)
-            print(f"  {r['symbol']}: Strat {strat_ret:.1%} vs B&H {r['buy_hold']:.1%} (+{r['outperformance']:.1%})")
-        if len(beating_bh) > 20:
-            print(f"  ... and {len(beating_bh) - 20} more")
+            strat_name = r.get('assigned_strategy', '?')
+            print(f"  {r['symbol']:<6} [{strat_name:<10}] Return: {strat_ret:+6.1%} vs B&H: {r['buy_hold']:+6.1%} (Out: {r['outperformance']:+.1%})")
+        if len(beating_bh) > 25:
+            print(f"  ... and {len(beating_bh) - 25} more")
+
+    # List all assignments by strategy
+    print("\n--- ASSIGNMENTS BY STRATEGY ---")
+    for strat in ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA']:
+        assigned = [r for r in valid_results if r.get('assigned_strategy') == strat]
+        if assigned:
+            symbols = [r['symbol'] for r in assigned]
+            print(f"\n{strat} ({len(assigned)}): {', '.join(symbols)}")
+
+    buyhold_assigned = [r for r in valid_results if r.get('assigned_strategy') == 'BUYHOLD']
+    if buyhold_assigned:
+        symbols = [r['symbol'] for r in buyhold_assigned]
+        print(f"\nBUYHOLD ({len(buyhold_assigned)}): {', '.join(symbols)}")
 
     # Average performance
     avg_bh = np.mean([r['buy_hold'] for r in valid_results])
-    avg_strat = np.mean([r.get('strategy_return', 0) for r in valid_results])
-    outperfs = [r['outperformance'] for r in valid_results if r['outperformance'] is not None]
+    avg_strat = np.mean([r.get('assigned_return', 0) for r in valid_results])
+    outperfs = [r['outperformance'] for r in valid_results if r.get('outperformance')]
     avg_outperf = np.mean(outperfs) if outperfs else 0
 
     print(f"\n--- AVERAGES ---")
-    print(f"  Avg Buy & Hold Return: {avg_bh:.1%}")
-    print(f"  Avg Strategy Return:   {avg_strat:.1%}")
-    print(f"  Avg Outperformance:    {avg_outperf:+.1%}")
+    print(f"  Avg Buy & Hold Return:     {avg_bh:.1%}")
+    print(f"  Avg Best Strategy Return:  {avg_strat:.1%}")
+    print(f"  Avg Outperformance:        {avg_outperf:+.1%}")
 
     return all_results
 
@@ -1864,8 +2071,8 @@ def screen_for_supertrend_stocks():
 
 def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dict:
     """
-    Optimize all 81 tickers and assign each to best strategy.
-    If strategy doesn't beat Buy & Hold, assign BUYHOLD instead.
+    Optimize all DOW 30 + NASDAQ 100 tickers and assign each to best strategy.
+    Strategies tested: SUPERTREND, JMA, KAMA, EMA, SMA, BUYHOLD
 
     Args:
         days_back: Number of days for backtest (default 365 = 1 year)
@@ -1877,16 +2084,16 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
     import json
 
     print("="*80)
-    print("OPTIMIZE ALL TICKERS - SUPERTREND vs BUY & HOLD")
+    print("OPTIMIZE ALL TICKERS - MULTI-STRATEGY")
+    print("Strategies: SUPERTREND, JMA, KAMA, EMA, SMA, BUYHOLD")
     print("="*80)
-    print(f"\nTickers: {len(ALL_TICKERS)}")
+    print(f"\nTickers: {len(ALL_TICKERS)} (DOW 30 + NASDAQ 100)")
     print(f"Period: {days_back} days ({days_back/365:.1f} years)")
     print(f"Data Source: TWS")
     print("="*80)
 
     assignments = {}
-    supertrend_count = 0
-    buyhold_count = 0
+    strategy_counts = {'SUPERTREND': 0, 'JMA': 0, 'KAMA': 0, 'EMA': 0, 'SMA': 0, 'BUYHOLD': 0}
     error_count = 0
 
     for i, symbol in enumerate(ALL_TICKERS, 1):
@@ -1902,24 +2109,23 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
 
         assigned = result['assigned_strategy']
         bh_ret = result['buy_hold']
-        strat_ret = result.get('strategy_return', -999)
+        strat_ret = result.get('assigned_return', bh_ret)
+        outperf = result.get('outperformance', 0)
 
-        if assigned == 'SUPERTREND':
-            supertrend_count += 1
-            print(f"SUPERTREND | Strat: {strat_ret:.1%} > B&H: {bh_ret:.1%} (+{result['outperformance']:.1%})")
+        strategy_counts[assigned] = strategy_counts.get(assigned, 0) + 1
+
+        if assigned != 'BUYHOLD':
+            print(f"{assigned:<10} | Return: {strat_ret:+.1%} vs B&H: {bh_ret:+.1%} (Out: {outperf:+.1%})")
         else:
-            buyhold_count += 1
-            if strat_ret > -999:
-                print(f"BUYHOLD    | Strat: {strat_ret:.1%} < B&H: {bh_ret:.1%}")
-            else:
-                print(f"BUYHOLD    | B&H: {bh_ret:.1%}")
+            print(f"BUYHOLD    | B&H: {bh_ret:+.1%}")
 
         assignments[symbol] = {
             'strategy': assigned,
             'params': result.get('assigned_params', {}),
             'buy_hold_return': bh_ret,
-            'strategy_return': strat_ret if strat_ret > -999 else None,
-            'beats_buyhold': result.get('beats_bh', False)
+            'strategy_return': strat_ret,
+            'beats_buyhold': result.get('beats_bh', False),
+            'all_strategies': result.get('all_strategies', {})
         }
 
     # Summary
@@ -1927,33 +2133,39 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
     print("OPTIMIZATION SUMMARY")
     print("="*80)
     print(f"\nTotal tickers: {len(ALL_TICKERS)}")
-    print(f"Assigned to SUPERTREND: {supertrend_count} ({100*supertrend_count/len(ALL_TICKERS):.0f}%)")
-    print(f"Assigned to BUYHOLD:    {buyhold_count} ({100*buyhold_count/len(ALL_TICKERS):.0f}%)")
-    print(f"Errors:                 {error_count}")
+    print(f"\n--- STRATEGY ASSIGNMENTS ---")
+    for strat in ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA', 'BUYHOLD']:
+        count = strategy_counts.get(strat, 0)
+        pct = 100 * count / len(ALL_TICKERS) if ALL_TICKERS else 0
+        print(f"  {strat:<12}: {count:3d} ({pct:4.1f}%)")
+    print(f"  {'ERRORS':<12}: {error_count:3d}")
 
-    # List assignments
-    print("\n--- SUPERTREND ASSIGNMENTS ---")
-    for sym, data in assignments.items():
-        if data['strategy'] == 'SUPERTREND':
-            params = data.get('params', {})
-            print(f"  {sym}: P={params.get('period', '?')}, M={params.get('mult', '?')}, Return={data.get('strategy_return', 0):.1%}")
+    # List assignments by strategy
+    for strat in ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA']:
+        assigned_syms = [(sym, data) for sym, data in assignments.items() if data.get('strategy') == strat]
+        if assigned_syms:
+            print(f"\n--- {strat} ASSIGNMENTS ({len(assigned_syms)}) ---")
+            for sym, data in sorted(assigned_syms, key=lambda x: x[1].get('strategy_return', 0), reverse=True):
+                params = data.get('params', {})
+                ret = data.get('strategy_return', 0)
+                param_str = ', '.join(f"{k}={v}" for k, v in params.items()) if params else "default"
+                print(f"  {sym:<6}: Return={ret:+6.1%} | {param_str}")
 
-    print("\n--- BUYHOLD ASSIGNMENTS ---")
-    for sym, data in assignments.items():
-        if data['strategy'] == 'BUYHOLD':
-            print(f"  {sym}: B&H Return={data.get('buy_hold_return', 0):.1%}")
+    buyhold_syms = [(sym, data) for sym, data in assignments.items() if data.get('strategy') == 'BUYHOLD']
+    if buyhold_syms:
+        print(f"\n--- BUYHOLD ASSIGNMENTS ({len(buyhold_syms)}) ---")
+        symbols = [sym for sym, _ in sorted(buyhold_syms, key=lambda x: x[1].get('buy_hold_return', 0), reverse=True)]
+        # Show as comma-separated list
+        print(f"  {', '.join(symbols)}")
 
     # Save results
     if save_results:
         output = {
-            '_comment': f"Strategy assignments for {len(ALL_TICKERS)} tickers",
+            '_comment': f"Multi-strategy assignments for {len(ALL_TICKERS)} tickers",
             '_optimization_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
             '_days_back': days_back,
-            '_summary': {
-                'supertrend': supertrend_count,
-                'buyhold': buyhold_count,
-                'errors': error_count
-            },
+            '_strategies': ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA', 'BUYHOLD'],
+            '_summary': {**strategy_counts, 'errors': error_count},
             'assignments': assignments
         }
 
