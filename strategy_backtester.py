@@ -519,6 +519,7 @@ class Backtester:
 # STRATEGY OPTIMIZER
 # =============================================================================
 
+# Base strategies with default parameters
 STRATEGIES = {
     'SUPERTREND': {'func': get_supertrend_signals, 'params': {'period': 10, 'multiplier': 2.0}},
     'JMA': {'func': get_jma_signals, 'params': {'period': 7, 'phase': 50, 'signal_period': 21}},
@@ -527,6 +528,51 @@ STRATEGIES = {
     'EMA': {'func': get_ema_signals, 'params': {'fast': 12, 'slow': 26}},
     'BUYHOLD': {'func': get_buyhold_signals, 'params': {}},
 }
+
+# Parameter grids for optimization - each symbol gets its optimal parameters
+PARAM_GRIDS = {
+    'SUPERTREND': {
+        'period': [7, 10, 14],
+        'multiplier': [1.5, 2.0, 2.5, 3.0]
+    },
+    'JMA': {
+        'period': [5, 7, 10],
+        'phase': [50],
+        'signal_period': [14, 21, 30]
+    },
+    'KAMA': {
+        'period': [10, 14, 20],
+        'fast': [2],
+        'slow': [30],
+        'signal_period': [5, 10, 14]
+    },
+    'SMA': {
+        'fast': [10, 20, 30],
+        'slow': [50, 100, 200]
+    },
+    'EMA': {
+        'fast': [8, 12, 20],
+        'slow': [21, 26, 50]
+    },
+    'BUYHOLD': {}
+}
+
+
+def generate_param_combinations(param_grid: Dict) -> List[Dict]:
+    """Generate all combinations of parameters from a grid"""
+    if not param_grid:
+        return [{}]
+
+    keys = list(param_grid.keys())
+    values = list(param_grid.values())
+
+    combinations = []
+    from itertools import product
+
+    for combo in product(*values):
+        combinations.append(dict(zip(keys, combo)))
+
+    return combinations
 
 
 # =============================================================================
@@ -579,8 +625,20 @@ def split_optimization_simulation(df: pd.DataFrame, opt_months: int = 6, sim_mon
     return opt_df, sim_df
 
 
-def test_symbol_all_strategies(symbol: str, df: pd.DataFrame, capital: float = DEFAULT_CAPITAL) -> Dict:
-    """Test a symbol with all strategies and return results"""
+def test_symbol_all_strategies(symbol: str, df: pd.DataFrame, capital: float = DEFAULT_CAPITAL,
+                                optimize_params: bool = True) -> Dict:
+    """Test a symbol with all strategies and ALL parameter combinations
+
+    Args:
+        symbol: Stock ticker
+        df: Historical price data
+        capital: Initial capital
+        optimize_params: If True, test all parameter combinations from PARAM_GRIDS
+                        If False, only test default parameters (faster)
+
+    Returns:
+        Dict with results for each strategy/param combination
+    """
     backtester = Backtester(initial_capital=capital)
     results = {}
 
@@ -588,30 +646,67 @@ def test_symbol_all_strategies(symbol: str, df: pd.DataFrame, capital: float = D
 
     for strat_name, strat_config in STRATEGIES.items():
         func = strat_config['func']
-        params = strat_config['params'].copy()
 
-        # Without HTF filter
-        try:
-            signals = func(df, **params, htf_filter=False)
-            result = backtester.run(df, signals)
-            results[strat_name] = result
-        except Exception as e:
-            results[strat_name] = {'error': str(e), 'win_rate': 0, 'total_return_pct': -100}
+        # Get parameter combinations to test
+        if optimize_params and strat_name in PARAM_GRIDS:
+            param_combinations = generate_param_combinations(PARAM_GRIDS[strat_name])
+        else:
+            # Use default params only
+            param_combinations = [strat_config['params'].copy()]
 
-        # With HTF filter (each period)
-        for htf_period in HTF_PERIODS:
+        # Test each parameter combination
+        for param_idx, params in enumerate(param_combinations):
+            # Create a unique key for this parameter combination
+            if optimize_params and len(param_combinations) > 1:
+                param_str = '_'.join(f"{k}{v}" for k, v in params.items())
+                base_key = f"{strat_name}_{param_str}"
+            else:
+                base_key = strat_name
+
+            # Without HTF filter
             try:
-                signals = func(df, **params, htf_filter=True, htf_period=htf_period)
+                signals = func(df, **params, htf_filter=False)
                 result = backtester.run(df, signals)
-                results[f'{strat_name}_HTF{htf_period}'] = result
+                result['params'] = params.copy()
+                result['htf_filter'] = False
+                result['htf_period'] = None
+                results[base_key] = result
             except Exception as e:
-                results[f'{strat_name}_HTF{htf_period}'] = {'error': str(e), 'win_rate': 0, 'total_return_pct': -100}
+                results[base_key] = {
+                    'error': str(e), 'win_rate': 0, 'total_return_pct': -100,
+                    'params': params.copy(), 'htf_filter': False, 'htf_period': None
+                }
+
+            # With HTF filter (each period)
+            for htf_period in HTF_PERIODS:
+                htf_key = f'{base_key}_HTF{htf_period}'
+                try:
+                    signals = func(df, **params, htf_filter=True, htf_period=htf_period)
+                    result = backtester.run(df, signals)
+                    result['params'] = params.copy()
+                    result['htf_filter'] = True
+                    result['htf_period'] = htf_period
+                    results[htf_key] = result
+                except Exception as e:
+                    results[htf_key] = {
+                        'error': str(e), 'win_rate': 0, 'total_return_pct': -100,
+                        'params': params.copy(), 'htf_filter': True, 'htf_period': htf_period
+                    }
 
     return results
 
 
 def find_best_strategy(results: Dict, min_trades: int = 3) -> Tuple[str, Dict]:
-    """Find the best strategy based on combined score"""
+    """Find the best strategy based on combined score
+
+    Returns:
+        (strategy_key, result_dict) where result_dict contains:
+        - All performance metrics
+        - 'params': the optimal parameters used
+        - 'htf_filter': whether HTF filter was used
+        - 'htf_period': the HTF period (or None)
+        - 'base_strategy': the base strategy name (SUPERTREND, JMA, etc.)
+    """
     best_strategy = None
     best_score = -float('inf')
     best_result = None
@@ -634,18 +729,31 @@ def find_best_strategy(results: Dict, min_trades: int = 3) -> Tuple[str, Dict]:
         if score > best_score:
             best_score = score
             best_strategy = strat_name
-            best_result = result
+            best_result = result.copy()
+
+    # Extract base strategy name
+    if best_result:
+        # Find base strategy (first part before any '_' that matches STRATEGIES keys)
+        for base_name in STRATEGIES.keys():
+            if best_strategy.startswith(base_name):
+                best_result['base_strategy'] = base_name
+                break
 
     return best_strategy, best_result
 
 
 def optimize_all_symbols(symbols: List[str], capital: float = DEFAULT_CAPITAL,
                          period: str = '2y') -> Dict:
-    """Optimize all symbols and assign to best strategies"""
+    """Optimize all symbols and assign to best strategies with optimal parameters"""
     assignments = {}
     all_results = {}
 
-    print(f"\nTesting {len(symbols)} symbols with {len(STRATEGIES) * (len(HTF_PERIODS) + 1)} strategy variants...")
+    # Calculate total combinations
+    total_combos = sum(
+        len(generate_param_combinations(PARAM_GRIDS.get(s, {}))) * (len(HTF_PERIODS) + 1)
+        for s in STRATEGIES.keys()
+    )
+    print(f"\nTesting {len(symbols)} symbols with ~{total_combos} strategy/param combinations each...")
     print("=" * 80)
 
     for i, symbol in enumerate(symbols):
@@ -660,23 +768,36 @@ def optimize_all_symbols(symbols: List[str], capital: float = DEFAULT_CAPITAL,
                 print(f"  Skipping {symbol}: insufficient data")
                 continue
 
-            # Test all strategies
-            results = test_symbol_all_strategies(symbol, df, capital)
+            # Test all strategies with all parameter combinations
+            results = test_symbol_all_strategies(symbol, df, capital, optimize_params=True)
             all_results[symbol] = results
 
-            # Find best strategy
+            # Find best strategy with optimal parameters
             best_strat, best_result = find_best_strategy(results)
 
             if best_strat:
+                # Extract base strategy and parameters
+                base_strat = best_result.get('base_strategy', best_strat.split('_')[0])
+                opt_params = best_result.get('params', {})
+                htf_filter = best_result.get('htf_filter', False)
+                htf_period = best_result.get('htf_period', None)
+
                 assignments[symbol] = {
-                    'strategy': best_strat,
+                    'strategy': base_strat,
+                    'strategy_key': best_strat,
+                    'params': opt_params,
+                    'htf_filter': htf_filter,
+                    'htf_period': htf_period,
                     'win_rate': best_result.get('win_rate', 0),
                     'profit_factor': best_result.get('profit_factor', 0),
                     'total_return_pct': best_result.get('total_return_pct', 0),
                     'sharpe_ratio': best_result.get('sharpe_ratio', 0),
                     'total_trades': best_result.get('total_trades', 0)
                 }
-                print(f"  Best: {best_strat} | Win: {best_result.get('win_rate', 0):.1f}% | "
+
+                htf_info = f" + HTF{htf_period}" if htf_filter else ""
+                print(f"  Best: {base_strat}{htf_info} | Params: {opt_params}")
+                print(f"        Win: {best_result.get('win_rate', 0):.1f}% | "
                       f"PF: {best_result.get('profit_factor', 0):.2f} | "
                       f"Return: {best_result.get('total_return_pct', 0):.1f}%")
             else:
@@ -691,7 +812,7 @@ def optimize_all_symbols(symbols: List[str], capital: float = DEFAULT_CAPITAL,
 
 
 def update_stock_categories(assignments: Dict, output_file: str = 'stock_categories.json'):
-    """Update stock_categories.json with new assignments"""
+    """Update stock_categories.json with new assignments and per-symbol optimized parameters"""
     # Load existing
     if os.path.exists(output_file):
         with open(output_file, 'r') as f:
@@ -704,7 +825,11 @@ def update_stock_categories(assignments: Dict, output_file: str = 'stock_categor
         if 'tickers' in categories['strategies'][strat_name]:
             categories['strategies'][strat_name]['tickers'] = []
 
-    # Assign tickers to strategies
+    # Initialize symbol_params section for per-symbol optimized parameters
+    if 'symbol_params' not in categories:
+        categories['symbol_params'] = {}
+
+    # Assign tickers to strategies and store their optimal parameters
     for symbol, data in assignments.items():
         strat = data.get('strategy', 'EXCLUDED')
 
@@ -718,13 +843,29 @@ def update_stock_categories(assignments: Dict, output_file: str = 'stock_categor
         if symbol not in categories['strategies'][strat].get('tickers', []):
             categories['strategies'][strat]['tickers'].append(symbol)
 
+        # Store per-symbol optimized parameters
+        if strat != 'EXCLUDED' and 'params' in data:
+            categories['symbol_params'][symbol] = {
+                'strategy': strat,
+                'params': data.get('params', {}),
+                'htf_filter': data.get('htf_filter', False),
+                'htf_period': data.get('htf_period', None),
+                'metrics': {
+                    'win_rate': data.get('win_rate', 0),
+                    'profit_factor': data.get('profit_factor', 0),
+                    'total_return_pct': data.get('total_return_pct', 0),
+                    'sharpe_ratio': data.get('sharpe_ratio', 0),
+                }
+            }
+
     # Sort tickers
     for strat_name in categories['strategies']:
         if 'tickers' in categories['strategies'][strat_name]:
             categories['strategies'][strat_name]['tickers'].sort()
 
     # Update metadata
-    categories['_comment'] = f"Auto-optimized {len(assignments)} symbols"
+    total_optimized = sum(1 for s, d in assignments.items() if d.get('strategy') != 'EXCLUDED')
+    categories['_comment'] = f"Auto-optimized {total_optimized} symbols with individual parameters"
     categories['_last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Save
@@ -740,6 +881,8 @@ def update_stock_categories(assignments: Dict, output_file: str = 'stock_categor
         tickers = strat_data.get('tickers', [])
         if tickers:
             print(f"{strat_name}: {len(tickers)} symbols")
+
+    print(f"\nPer-symbol optimized parameters: {len(categories.get('symbol_params', {}))} symbols")
 
 
 # =============================================================================
@@ -802,32 +945,45 @@ def optimize_and_simulate(symbols: List[str], capital: float = DEFAULT_CAPITAL,
             print(f"  Phase 2: Simulating...")
             backtester = Backtester(initial_capital=capital)
 
-            # Get the strategy function and params
-            base_strat = best_strat.split('_HTF')[0]
-            if base_strat in STRATEGIES:
-                func = STRATEGIES[base_strat]['func']
-                params = STRATEGIES[base_strat]['params'].copy()
+            # Get the strategy function and OPTIMIZED params from the result
+            base_strat = best_opt_result.get('base_strategy')
+            if not base_strat:
+                # Fallback: extract from strategy name
+                for name in STRATEGIES.keys():
+                    if best_strat.startswith(name):
+                        base_strat = name
+                        break
 
-                # Add HTF filter if applicable
-                if '_HTF' in best_strat:
-                    htf_period = int(best_strat.split('_HTF')[1])
-                    params['htf_filter'] = True
-                    params['htf_period'] = htf_period
-                else:
-                    params['htf_filter'] = False
+            if base_strat and base_strat in STRATEGIES:
+                func = STRATEGIES[base_strat]['func']
+
+                # Use the OPTIMIZED parameters from the best result
+                opt_params = best_opt_result.get('params', STRATEGIES[base_strat]['params'].copy())
+                htf_filter = best_opt_result.get('htf_filter', False)
+                htf_period = best_opt_result.get('htf_period', None)
+
+                # Build full params for simulation
+                sim_params = opt_params.copy()
+                sim_params['htf_filter'] = htf_filter
+                if htf_filter and htf_period:
+                    sim_params['htf_period'] = htf_period
+
+                print(f"    Params: {opt_params}")
+                print(f"    HTF Filter: {htf_filter}" + (f" (period={htf_period})" if htf_filter else ""))
 
                 # Run simulation
                 sim_df.attrs['symbol'] = symbol
-                signals = func(sim_df, **params)
+                signals = func(sim_df, **sim_params)
                 sim_result = backtester.run(sim_df, signals)
 
                 print(f"    Sim Win Rate: {sim_result.get('win_rate', 0):.1f}%")
                 print(f"    Sim Return: {sim_result.get('total_return_pct', 0):.1f}%")
                 print(f"    Sim Trades: {sim_result.get('total_trades', 0)}")
 
-                # Store results
+                # Store results with OPTIMIZED parameters
                 results[symbol] = {
-                    'strategy': best_strat,
+                    'strategy': base_strat,
+                    'strategy_key': best_strat,
                     'optimization': {
                         'win_rate': best_opt_result.get('win_rate', 0),
                         'return_pct': best_opt_result.get('total_return_pct', 0),
@@ -839,14 +995,27 @@ def optimize_and_simulate(symbols: List[str], capital: float = DEFAULT_CAPITAL,
                         'trades': sim_result.get('total_trades', 0),
                         'profit_factor': sim_result.get('profit_factor', 0),
                     },
-                    'params': params,
+                    'params': opt_params,
+                    'htf_filter': htf_filter,
+                    'htf_period': htf_period,
                     'timeframe': timeframe
                 }
 
+                # Store optimized params for this symbol
                 optimized_params[symbol] = {
-                    'strategy': best_strat,
-                    'params': params,
+                    'strategy': base_strat,
+                    'params': opt_params,
+                    'htf_filter': htf_filter,
+                    'htf_period': htf_period,
                     'timeframe': timeframe,
+                    'optimization_metrics': {
+                        'win_rate': best_opt_result.get('win_rate', 0),
+                        'return_pct': best_opt_result.get('total_return_pct', 0),
+                    },
+                    'simulation_metrics': {
+                        'win_rate': sim_result.get('win_rate', 0),
+                        'return_pct': sim_result.get('total_return_pct', 0),
+                    },
                     'optimized_date': datetime.now().strftime("%Y-%m-%d")
                 }
 
