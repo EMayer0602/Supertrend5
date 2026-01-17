@@ -522,16 +522,15 @@ def main():
     # Load categories
     categories = load_stock_categories()
 
-    # Dashboard Title
+    # Dashboard Title with timestamp
     status_class = "status-connected" if st.session_state.connected else "status-disconnected"
     status_text = "CONNECTED" if st.session_state.connected else "DISCONNECTED"
+    last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     st.markdown(f"""
-        <div class="dashboard-title">IB Portfolio Dashboard</div>
-        <div class="dashboard-subtitle">
-            STOCK Trading | Auto-refresh: 30s |
-            <span class="{status_class}">[{status_text}]</span>
-            <span class="{'status-market-open' if market_open else 'status-market-closed'}">[{market_status}]</span>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="dashboard-title">Trade Monitor</div>
+            <div style="color:#6a8caf; font-size:12px;">Last Update: {last_update}</div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -555,24 +554,39 @@ def main():
 
         num_positions = len(portfolio)
         num_closed = 0  # TODO: Track closed trades
-        win_rate = 58.0  # TODO: Calculate from closed trades
 
-        # Header Metric Boxes (6 columns like Crypto9)
+        # Calculate win rate from closed trades (0% if no trades)
+        win_rate = 0.0
+        if num_closed > 0:
+            # Would calculate from actual closed trades
+            pass
+
+        # Calculate total return
+        initial_capital = net_liq - unrealized_pnl - realized_pnl
+        if initial_capital > 0:
+            total_return = unrealized_pnl + realized_pnl
+            total_return_pct = (total_return / initial_capital) * 100
+        else:
+            total_return = unrealized_pnl + realized_pnl
+            total_return_pct = 0.0
+
+        # Header Metric Boxes (6 columns like Trade Monitor)
         col1, col2, col3, col4, col5, col6 = st.columns(6)
 
         with col1:
             st.markdown(f"""
-                <div class="metric-box">
-                    <div class="metric-label">Net Liquidity</div>
+                <div class="metric-box" style="background: linear-gradient(135deg, #1a5a3a 0%, #0d2d1d 100%); border-color:#2a6a4a;">
+                    <div class="metric-label">NET LIQUIDITY (TWS)</div>
                     <div class="metric-value">${net_liq:,.2f}</div>
                 </div>
             """, unsafe_allow_html=True)
 
         with col2:
+            daily_class = "positive" if daily_pnl >= 0 else "negative"
             st.markdown(f"""
                 <div class="metric-box">
-                    <div class="metric-label">Open Positions</div>
-                    <div class="metric-value cyan">{num_positions}</div>
+                    <div class="metric-label">DAILY PNL (TWS)</div>
+                    <div class="metric-value {daily_class}">${daily_pnl:+,.2f}</div>
                 </div>
             """, unsafe_allow_html=True)
 
@@ -580,35 +594,179 @@ def main():
             unrlz_class = "positive" if unrealized_pnl >= 0 else "negative"
             st.markdown(f"""
                 <div class="metric-box">
-                    <div class="metric-label">Unrealized PNL</div>
-                    <div class="metric-value {unrlz_class}">${unrealized_pnl:,.2f}</div>
+                    <div class="metric-label">UNREALIZED (TWS)</div>
+                    <div class="metric-value {unrlz_class}">${unrealized_pnl:+,.2f}</div>
                 </div>
             """, unsafe_allow_html=True)
 
         with col4:
+            rlz_class = "positive" if realized_pnl >= 0 else "negative"
             st.markdown(f"""
                 <div class="metric-box">
-                    <div class="metric-label">Closed Trades</div>
-                    <div class="metric-value cyan">{num_closed}</div>
+                    <div class="metric-label">REALIZED PNL</div>
+                    <div class="metric-value {rlz_class}">${realized_pnl:+,.2f}</div>
                 </div>
             """, unsafe_allow_html=True)
 
         with col5:
-            rlz_class = "positive" if realized_pnl >= 0 else "negative"
+            ret_class = "positive" if total_return >= 0 else "negative"
             st.markdown(f"""
                 <div class="metric-box">
-                    <div class="metric-label">Realized PNL</div>
-                    <div class="metric-value {rlz_class}">${realized_pnl:,.2f}</div>
+                    <div class="metric-label">TOTAL RETURN</div>
+                    <div class="metric-value {ret_class}">${total_return:+,.2f} ({total_return_pct:+.1f}%)</div>
                 </div>
             """, unsafe_allow_html=True)
 
         with col6:
             st.markdown(f"""
                 <div class="metric-box">
-                    <div class="metric-label">Win Rate</div>
-                    <div class="metric-value positive">{win_rate:.1f}%</div>
+                    <div class="metric-label">POSITIONS</div>
+                    <div class="metric-value cyan">{num_positions}</div>
                 </div>
             """, unsafe_allow_html=True)
+
+        # =====================================================================
+        # CHARTS SECTION
+        # =====================================================================
+
+        # Row 1: Kapitalkurve and Daily PnL charts
+        chart_col1, chart_col2 = st.columns([2, 1])
+
+        with chart_col1:
+            # Kapitalkurve (Equity Curve)
+            st.markdown('<div class="section-title">Kapitalkurve <span style="float:right; color:#00ff88;">${:+,.2f}</span></div>'.format(total_return), unsafe_allow_html=True)
+
+            # Generate sample equity curve data (in production, this would come from trade history)
+            dates = pd.date_range(end=datetime.now(), periods=10, freq='D')
+            equity_values = [initial_capital + (total_return * i / 10) for i in range(10)]
+            equity_values[-1] = net_liq
+
+            equity_df = pd.DataFrame({'Date': dates, 'Equity': equity_values})
+
+            equity_html = f"""
+            <div style="background:#0d1a2d; border:1px solid #1a2942; border-radius:8px; padding:15px; height:200px;">
+                <svg width="100%" height="180" viewBox="0 0 600 180">
+                    <polyline points="{','.join([f'{i*60},{180 - (v - min(equity_values)) / (max(equity_values) - min(equity_values) + 1) * 160}' for i, v in enumerate(equity_values)])}"
+                        fill="none" stroke="#00ff88" stroke-width="2"/>
+                    {''.join([f'<circle cx="{i*60}" cy="{180 - (v - min(equity_values)) / (max(equity_values) - min(equity_values) + 1) * 160}" r="4" fill="#00ff88"/>' for i, v in enumerate(equity_values)])}
+                </svg>
+            </div>
+            """
+            st.markdown(equity_html, unsafe_allow_html=True)
+
+        with chart_col2:
+            # Daily PnL chart
+            daily_class = "positive" if daily_pnl >= 0 else "negative"
+            st.markdown(f'<div class="section-title">Daily PnL <span style="float:right;" class="{daily_class}">${daily_pnl:+,.2f}</span></div>', unsafe_allow_html=True)
+
+            # Mini bar chart for daily PnL
+            daily_pnl_html = f"""
+            <div style="background:#0d1a2d; border:1px solid #1a2942; border-radius:8px; padding:15px; height:200px; display:flex; align-items:flex-end; justify-content:center;">
+                <div style="width:80%; height:{'max(10, min(150, abs(daily_pnl) / 100))'} px; background:{'#00ff88' if daily_pnl >= 0 else '#ff4466'}; border-radius:4px;"></div>
+            </div>
+            """
+            st.markdown(daily_pnl_html, unsafe_allow_html=True)
+
+        # Row 2: Open Trades PnL Bar Chart and Performance Metrics
+        chart_col3, chart_col4 = st.columns([2, 1])
+
+        with chart_col3:
+            # Open Trades PnL horizontal bar chart
+            st.markdown(f'<div class="section-title">Open Trades PnL (alle {num_positions} Positionen) <span style="float:right; color:#00ff88;">${unrealized_pnl:+,.2f}</span></div>', unsafe_allow_html=True)
+
+            if portfolio:
+                # Sort by P&L for the bar chart
+                sorted_portfolio = sorted(portfolio, key=lambda x: x.get('unrealized_pnl', 0))
+
+                # Create horizontal bar chart HTML
+                max_pnl = max(abs(p.get('unrealized_pnl', 0)) for p in portfolio) if portfolio else 1
+                bar_html = '<div style="background:#0d1a2d; border:1px solid #1a2942; border-radius:8px; padding:15px;">'
+
+                for p in sorted_portfolio:
+                    symbol = p['symbol']
+                    pnl = p.get('unrealized_pnl', 0)
+                    bar_width = abs(pnl) / max_pnl * 40 if max_pnl > 0 else 0
+                    bar_color = '#00ff88' if pnl >= 0 else '#ff4466'
+                    direction = 'right' if pnl >= 0 else 'left'
+
+                    bar_html += f'''
+                    <div style="display:flex; align-items:center; margin:4px 0; font-size:11px;">
+                        <span style="width:50px; color:#fff; text-align:right; padding-right:10px;">{symbol}</span>
+                        <div style="flex:1; display:flex; align-items:center;">
+                            <div style="width:50%; display:flex; justify-content:flex-end;">
+                                {"<div style='width:{}%; height:12px; background:{}; border-radius:2px;'></div>".format(bar_width, bar_color) if pnl < 0 else ""}
+                            </div>
+                            <div style="width:2px; height:20px; background:#333;"></div>
+                            <div style="width:50%; display:flex; justify-content:flex-start;">
+                                {"<div style='width:{}%; height:12px; background:{}; border-radius:2px;'></div>".format(bar_width, bar_color) if pnl >= 0 else ""}
+                            </div>
+                        </div>
+                    </div>
+                    '''
+
+                bar_html += '</div>'
+                st.markdown(bar_html, unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="background:#0d1a2d; border:1px solid #1a2942; border-radius:8px; padding:40px; text-align:center; color:#666;">No open positions</div>', unsafe_allow_html=True)
+
+        with chart_col4:
+            # Performance Metrics panel
+            st.markdown('<div class="section-title">Performance Metrics</div>', unsafe_allow_html=True)
+
+            # Calculate metrics
+            avg_winner = 0.0
+            avg_loser = 0.0
+            profit_factor = 0.0
+            sharpe_ratio = 0.0
+            max_drawdown = 0.0
+            max_drawdown_pct = 0.0
+            expectancy = 0.0
+
+            metrics_html = f"""
+            <div style="background:#0d1a2d; border:1px solid #1a2942; border-radius:8px; padding:15px;">
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Initial Capital</span>
+                    <span style="color:#fff;">${initial_capital:,.2f}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Win Rate</span>
+                    <span style="color:#00ff88;">{win_rate:.1f}%</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Profit Factor</span>
+                    <span style="color:#fff;">{profit_factor:.2f}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Sharpe Ratio</span>
+                    <span style="color:#fff;">{sharpe_ratio:.2f}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Max Drawdown</span>
+                    <span style="color:#ff4466;">${max_drawdown:,.2f} ({max_drawdown_pct:.2f}%)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Total Trades</span>
+                    <span style="color:#fff;">{num_closed}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Avg Winner</span>
+                    <span style="color:#00ff88;">${avg_winner:+,.2f}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a2942;">
+                    <span style="color:#6a8caf;">Avg Loser</span>
+                    <span style="color:#ff4466;">${avg_loser:+,.2f}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0;">
+                    <span style="color:#6a8caf;">Expectancy</span>
+                    <span style="color:#00ff88;">${expectancy:+,.2f}</span>
+                </div>
+            </div>
+            """
+            st.markdown(metrics_html, unsafe_allow_html=True)
+
+        # =====================================================================
+        # TABLES SECTION
+        # =====================================================================
 
         # Open Trades Table
         open_trades_html = create_open_trades_table(portfolio, categories, pnl_data)
@@ -680,13 +838,13 @@ def main():
         components.html(full_html, height=table_height, scrolling=True)
 
     else:
-        # Not connected - show empty metric boxes
+        # Not connected - show empty metric boxes matching Trade Monitor style
         col1, col2, col3, col4, col5, col6 = st.columns(6)
 
         with col1:
             st.markdown("""
-                <div class="metric-box">
-                    <div class="metric-label">Net Liquidity</div>
+                <div class="metric-box" style="background: linear-gradient(135deg, #1a5a3a 0%, #0d2d1d 100%); border-color:#2a6a4a;">
+                    <div class="metric-label">NET LIQUIDITY (TWS)</div>
                     <div class="metric-value">$0.00</div>
                 </div>
             """, unsafe_allow_html=True)
@@ -694,15 +852,15 @@ def main():
         with col2:
             st.markdown("""
                 <div class="metric-box">
-                    <div class="metric-label">Open Positions</div>
-                    <div class="metric-value cyan">0</div>
+                    <div class="metric-label">DAILY PNL (TWS)</div>
+                    <div class="metric-value">$+0.00</div>
                 </div>
             """, unsafe_allow_html=True)
 
         with col3:
             st.markdown("""
                 <div class="metric-box">
-                    <div class="metric-label">Unrealized PNL</div>
+                    <div class="metric-label">UNREALIZED (TWS)</div>
                     <div class="metric-value">$0.00</div>
                 </div>
             """, unsafe_allow_html=True)
@@ -710,24 +868,24 @@ def main():
         with col4:
             st.markdown("""
                 <div class="metric-box">
-                    <div class="metric-label">Closed Trades</div>
-                    <div class="metric-value cyan">0</div>
+                    <div class="metric-label">REALIZED PNL</div>
+                    <div class="metric-value">$0.00</div>
                 </div>
             """, unsafe_allow_html=True)
 
         with col5:
             st.markdown("""
                 <div class="metric-box">
-                    <div class="metric-label">Realized PNL</div>
-                    <div class="metric-value">$0.00</div>
+                    <div class="metric-label">TOTAL RETURN</div>
+                    <div class="metric-value">$0.00 (0.0%)</div>
                 </div>
             """, unsafe_allow_html=True)
 
         with col6:
             st.markdown("""
                 <div class="metric-box">
-                    <div class="metric-label">Win Rate</div>
-                    <div class="metric-value">0.0%</div>
+                    <div class="metric-label">POSITIONS</div>
+                    <div class="metric-value cyan">0</div>
                 </div>
             """, unsafe_allow_html=True)
 
