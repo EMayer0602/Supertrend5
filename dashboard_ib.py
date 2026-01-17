@@ -677,19 +677,39 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
-    # Footer
+    # Footer with countdown
     st.markdown("---")
-    refresh_text = "30 sec" if market_open else "Manual"
-    st.markdown(f"""
-        <p style="color:#444; font-size:10px; text-align:center;">
-            Refresh: {refresh_text} | Last: {datetime.now().strftime("%H:%M:%S")} | IB API
-        </p>
-    """, unsafe_allow_html=True)
 
-    # Auto-refresh during market hours
+    # Auto-refresh during market hours with countdown
     if market_open and st.session_state.connected:
-        time.sleep(30)
+        countdown_placeholder = st.empty()
+
+        for seconds_left in range(30, 0, -1):
+            countdown_placeholder.markdown(f"""
+                <div style="text-align:center; padding:10px;">
+                    <span style="color:#00bfff; font-size:14px; font-family:'Courier New',monospace;">
+                        Next refresh in: <span style="color:#00ff00; font-weight:bold; font-size:18px;">{seconds_left}</span> seconds
+                    </span>
+                    <span style="color:#444; font-size:10px; margin-left:20px;">
+                        Last: {datetime.now().strftime("%H:%M:%S")} | Market: OPEN | IB API
+                    </span>
+                </div>
+            """, unsafe_allow_html=True)
+            time.sleep(1)
+
         st.rerun()
+    else:
+        # Outside market hours - manual refresh only
+        st.markdown(f"""
+            <div style="text-align:center; padding:10px;">
+                <span style="color:#ff4444; font-size:12px;">
+                    Market Closed - Manual refresh (CTRL+SHIFT+R)
+                </span>
+                <span style="color:#444; font-size:10px; margin-left:20px;">
+                    Last: {datetime.now().strftime("%H:%M:%S")} | IB API
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
