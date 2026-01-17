@@ -1,5 +1,4 @@
 import pandas as pd
-import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
 import plotly.graph_objects as go
@@ -7,7 +6,87 @@ from plotly.subplots import make_subplots
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional
 import warnings
+import asyncio
+
 warnings.filterwarnings('ignore')
+
+# Fix for Python 3.10+ event loop issue with ib_insync
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+from ib_insync import IB, Stock, util
+
+# =============================================================================
+# IB CONNECTION
+# =============================================================================
+_ib_connection = None
+
+def get_ib_connection(host: str = '127.0.0.1', port: int = 7497, client_id: int = 21) -> IB:
+    """Get or create IB connection"""
+    global _ib_connection
+    if _ib_connection is None or not _ib_connection.isConnected():
+        _ib_connection = IB()
+        _ib_connection.connect(host, port, clientId=client_id)
+        print(f"Connected to TWS at {host}:{port}")
+    return _ib_connection
+
+def disconnect_ib():
+    """Disconnect from IB"""
+    global _ib_connection
+    if _ib_connection and _ib_connection.isConnected():
+        _ib_connection.disconnect()
+        print("Disconnected from TWS")
+    _ib_connection = None
+
+def download_from_tws(symbol: str, days_back: int = 365) -> pd.DataFrame:
+    """Download historical data from TWS"""
+    ib = get_ib_connection()
+
+    contract = Stock(symbol, 'SMART', 'USD')
+    ib.qualifyContracts(contract)
+
+    # Calculate duration
+    if days_back <= 365:
+        duration = f'{days_back} D'
+    else:
+        months = days_back // 30
+        if months <= 12:
+            duration = f'{months} M'
+        else:
+            years = months // 12
+            duration = f'{years} Y'
+
+    bars = ib.reqHistoricalData(
+        contract,
+        endDateTime='',
+        durationStr=duration,
+        barSizeSetting='1 day',
+        whatToShow='TRADES',
+        useRTH=True,
+        formatDate=1
+    )
+
+    if not bars:
+        raise ValueError(f"No data available for {symbol}")
+
+    df = util.df(bars)
+    df.set_index('date', inplace=True)
+
+    # Rename columns to match expected format with symbol suffix
+    df.rename(columns={
+        'open': f'Open_{symbol}',
+        'high': f'High_{symbol}',
+        'low': f'Low_{symbol}',
+        'close': f'Close_{symbol}',
+        'volume': f'Volume_{symbol}'
+    }, inplace=True)
+
+    # Small delay to avoid pacing violations
+    ib.sleep(0.3)
+
+    return df
 
 # =============================================================================
 # CONFIGURATION
@@ -1083,23 +1162,18 @@ def main():
     print(f"Initial Capital: ${config.initial_capital:,.2f}")
     print(f"Backtest Period: {config.days_back} days")
 
-    # Download Data
-    print(f"\nDownloading {config.symbol} data...")
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=config.days_back)
+    # Download Data from TWS
+    print(f"\nDownloading {config.symbol} data from TWS...")
 
-    stock_data = yf.download(config.symbol, start=start_date, end=end_date, progress=False)
+    try:
+        stock_data = download_from_tws(config.symbol, config.days_back)
+    except Exception as e:
+        print(f"Error downloading data: {e}")
+        return
 
     if stock_data.empty:
         print("Error: No data downloaded")
         return
-
-    # Flatten MultiIndex columns
-    if isinstance(stock_data.columns, pd.MultiIndex):
-        stock_data.columns = ['_'.join(col).strip() for col in stock_data.columns.values]
-    else:
-        # Rename columns to include symbol
-        stock_data.columns = [f'{col}_{config.symbol}' for col in stock_data.columns]
 
     print(f"Data loaded: {len(stock_data)} trading days")
     print(f"Date range: {stock_data.index[0].strftime('%Y-%m-%d')} to {stock_data.index[-1].strftime('%Y-%m-%d')}")
@@ -1306,18 +1380,11 @@ def test_ticker(symbol: str, days_back: int = 365) -> Dict:
     )
 
     try:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days_back)
-        stock_data = yf.download(symbol, start=start_date, end=end_date, progress=False)
+        # Download from TWS
+        stock_data = download_from_tws(symbol, days_back)
 
         if stock_data.empty or len(stock_data) < 100:
             return {'symbol': symbol, 'error': 'No data'}
-
-        # Flatten columns
-        if isinstance(stock_data.columns, pd.MultiIndex):
-            stock_data.columns = ['_'.join(col).strip() for col in stock_data.columns.values]
-        else:
-            stock_data.columns = [f'{col}_{symbol}' for col in stock_data.columns]
 
         close_col = f'Close_{symbol}'
         high_col = f'High_{symbol}'
@@ -1361,14 +1428,28 @@ def test_ticker(symbol: str, days_back: int = 365) -> Dict:
 
         beats_bh = best_return > buy_hold_return if best_params else False
 
+        # Assign strategy: if Supertrend beats B&H use it, otherwise use BUYHOLD
+        if beats_bh and best_params:
+            assigned_strategy = 'SUPERTREND'
+            assigned_params = best_params
+            assigned_return = best_return
+        else:
+            assigned_strategy = 'BUYHOLD'
+            assigned_params = {}
+            assigned_return = buy_hold_return
+
         return {
             'symbol': symbol,
             'buy_hold': buy_hold_return,
-            'strategy': best_return,
+            'strategy_return': best_return,
             'outperformance': best_return - buy_hold_return if best_params else None,
             'beats_bh': beats_bh,
             'params': best_params,
-            'data_days': len(stock_data)
+            'data_days': len(stock_data),
+            # Assignment based on B&H comparison
+            'assigned_strategy': assigned_strategy,
+            'assigned_params': assigned_params,
+            'assigned_return': assigned_return
         }
     except Exception as e:
         return {'symbol': symbol, 'error': str(e)}
@@ -1463,16 +1544,19 @@ def run_multi_ticker_analysis():
 def analyze_stock_characteristics(symbol: str, days_back: int = 365) -> Dict:
     """Analyze stock characteristics to determine strategy suitability"""
     try:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days_back)
-        data = yf.download(symbol, start=start_date, end=end_date, progress=False)
+        # Download from TWS
+        data = download_from_tws(symbol, days_back)
 
         if data.empty or len(data) < 100:
             return {'symbol': symbol, 'error': 'No data'}
 
-        close = data['Close'].values.flatten() if isinstance(data['Close'].values[0], np.ndarray) else data['Close'].values
-        high = data['High'].values.flatten() if isinstance(data['High'].values[0], np.ndarray) else data['High'].values
-        low = data['Low'].values.flatten() if isinstance(data['Low'].values[0], np.ndarray) else data['Low'].values
+        close_col = f'Close_{symbol}'
+        high_col = f'High_{symbol}'
+        low_col = f'Low_{symbol}'
+
+        close = data[close_col].values
+        high = data[high_col].values
+        low = data[low_col].values
 
         # Calculate metrics
         returns = np.diff(close) / close[:-1]
@@ -1755,13 +1839,151 @@ def screen_for_supertrend_stocks():
     return suitable_stocks, unsuitable_stocks
 
 
+# =============================================================================
+# ALL 81 TICKERS - Complete list for optimization
+# =============================================================================
+ALL_TICKERS = [
+    # Tech Giants
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'ADBE',
+    'CRM', 'ORCL', 'INTC', 'CSCO', 'QCOM', 'AVGO', 'TXN', 'MU', 'AMAT', 'LRCX',
+    # Finance
+    'JPM', 'BAC', 'WFC', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ', 'COIN',
+    # Energy
+    'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PXD', 'MPC', 'VLO', 'PSX', 'OXY',
+    # Healthcare
+    'JNJ', 'UNH', 'PFE', 'MRK', 'ABBV', 'LLY', 'BMY', 'AMGN', 'GILD', 'MRNA',
+    # Media & Telecom
+    'DIS', 'CMCSA', 'T', 'VZ', 'TMUS',
+    # Consumer
+    'NKE', 'SBUX', 'MCD', 'HD', 'LOW', 'TGT', 'WMT', 'COST',
+    # Industrial & Defense
+    'BA', 'LMT', 'RTX', 'NOC', 'GD', 'CAT', 'DE', 'HON',
+    # Travel & Leisure
+    'UBER', 'LYFT', 'ABNB', 'BKNG', 'EXPE',
+    # Cloud & Software
+    'PLTR', 'SNOW', 'CRWD', 'ZS', 'NET', 'DDOG', 'MDB', 'SHOP'
+]
+
+
+def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dict:
+    """
+    Optimize all 81 tickers and assign each to best strategy.
+    If strategy doesn't beat Buy & Hold, assign BUYHOLD instead.
+
+    Args:
+        days_back: Number of days for backtest (default 365 = 1 year)
+        save_results: Save results to JSON file
+
+    Returns:
+        Dict with assignments for each ticker
+    """
+    import json
+
+    print("="*80)
+    print("OPTIMIZE ALL TICKERS - SUPERTREND vs BUY & HOLD")
+    print("="*80)
+    print(f"\nTickers: {len(ALL_TICKERS)}")
+    print(f"Period: {days_back} days ({days_back/365:.1f} years)")
+    print(f"Data Source: TWS")
+    print("="*80)
+
+    assignments = {}
+    supertrend_count = 0
+    buyhold_count = 0
+    error_count = 0
+
+    for i, symbol in enumerate(ALL_TICKERS, 1):
+        print(f"\n[{i}/{len(ALL_TICKERS)}] {symbol}...", end=" ")
+
+        result = test_ticker(symbol, days_back)
+
+        if 'error' in result:
+            print(f"ERROR: {result['error']}")
+            assignments[symbol] = {'strategy': 'ERROR', 'error': result['error']}
+            error_count += 1
+            continue
+
+        assigned = result['assigned_strategy']
+        bh_ret = result['buy_hold']
+        strat_ret = result.get('strategy_return', -999)
+
+        if assigned == 'SUPERTREND':
+            supertrend_count += 1
+            print(f"SUPERTREND | Strat: {strat_ret:.1%} > B&H: {bh_ret:.1%} (+{result['outperformance']:.1%})")
+        else:
+            buyhold_count += 1
+            if strat_ret > -999:
+                print(f"BUYHOLD    | Strat: {strat_ret:.1%} < B&H: {bh_ret:.1%}")
+            else:
+                print(f"BUYHOLD    | B&H: {bh_ret:.1%}")
+
+        assignments[symbol] = {
+            'strategy': assigned,
+            'params': result.get('assigned_params', {}),
+            'buy_hold_return': bh_ret,
+            'strategy_return': strat_ret if strat_ret > -999 else None,
+            'beats_buyhold': result.get('beats_bh', False)
+        }
+
+    # Summary
+    print("\n" + "="*80)
+    print("OPTIMIZATION SUMMARY")
+    print("="*80)
+    print(f"\nTotal tickers: {len(ALL_TICKERS)}")
+    print(f"Assigned to SUPERTREND: {supertrend_count} ({100*supertrend_count/len(ALL_TICKERS):.0f}%)")
+    print(f"Assigned to BUYHOLD:    {buyhold_count} ({100*buyhold_count/len(ALL_TICKERS):.0f}%)")
+    print(f"Errors:                 {error_count}")
+
+    # List assignments
+    print("\n--- SUPERTREND ASSIGNMENTS ---")
+    for sym, data in assignments.items():
+        if data['strategy'] == 'SUPERTREND':
+            params = data.get('params', {})
+            print(f"  {sym}: P={params.get('period', '?')}, M={params.get('mult', '?')}, Return={data.get('strategy_return', 0):.1%}")
+
+    print("\n--- BUYHOLD ASSIGNMENTS ---")
+    for sym, data in assignments.items():
+        if data['strategy'] == 'BUYHOLD':
+            print(f"  {sym}: B&H Return={data.get('buy_hold_return', 0):.1%}")
+
+    # Save results
+    if save_results:
+        output = {
+            '_comment': f"Strategy assignments for {len(ALL_TICKERS)} tickers",
+            '_optimization_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+            '_days_back': days_back,
+            '_summary': {
+                'supertrend': supertrend_count,
+                'buyhold': buyhold_count,
+                'errors': error_count
+            },
+            'assignments': assignments
+        }
+
+        with open('ticker_assignments.json', 'w') as f:
+            json.dump(output, f, indent=4)
+        print(f"\nResults saved to: ticker_assignments.json")
+
+    # Disconnect from TWS
+    disconnect_ib()
+
+    return assignments
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--multi":
         run_multi_ticker_analysis()
+        disconnect_ib()
     elif len(sys.argv) > 1 and sys.argv[1] == "--enhanced":
         run_enhanced_analysis()
+        disconnect_ib()
     elif len(sys.argv) > 1 and sys.argv[1] == "--screen":
         screen_for_supertrend_stocks()
+        disconnect_ib()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--all":
+        # Optimize all 81 tickers
+        optimize_all_tickers(days_back=365)
     else:
         main()
+        disconnect_ib()
