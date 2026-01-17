@@ -911,6 +911,10 @@ def optimize_all_symbols(symbols: List[str], capital: float = DEFAULT_CAPITAL,
                 print(f"  Skipping {symbol}: insufficient data")
                 continue
 
+            # Calculate Buy & Hold return for comparison
+            buy_hold_return = (df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0] * 100
+            print(f"  Buy & Hold: {buy_hold_return:.1f}%")
+
             # Test all strategies with all parameter combinations
             results = test_symbol_all_strategies(symbol, df, capital, optimize_params=True)
             all_results[symbol] = results
@@ -924,28 +928,63 @@ def optimize_all_symbols(symbols: List[str], capital: float = DEFAULT_CAPITAL,
                 opt_params = best_result.get('params', {})
                 htf_filter = best_result.get('htf_filter', False)
                 htf_period = best_result.get('htf_period', None)
+                strategy_return = best_result.get('total_return_pct', 0)
 
-                assignments[symbol] = {
-                    'strategy': base_strat,
-                    'strategy_key': best_strat,
-                    'params': opt_params,
-                    'htf_filter': htf_filter,
-                    'htf_period': htf_period,
-                    'win_rate': best_result.get('win_rate', 0),
-                    'profit_factor': best_result.get('profit_factor', 0),
-                    'total_return_pct': best_result.get('total_return_pct', 0),
-                    'sharpe_ratio': best_result.get('sharpe_ratio', 0),
-                    'total_trades': best_result.get('total_trades', 0)
-                }
+                # Check if strategy beats Buy & Hold
+                if strategy_return > buy_hold_return:
+                    # Strategy wins - use it
+                    assignments[symbol] = {
+                        'strategy': base_strat,
+                        'strategy_key': best_strat,
+                        'params': opt_params,
+                        'htf_filter': htf_filter,
+                        'htf_period': htf_period,
+                        'win_rate': best_result.get('win_rate', 0),
+                        'profit_factor': best_result.get('profit_factor', 0),
+                        'total_return_pct': strategy_return,
+                        'sharpe_ratio': best_result.get('sharpe_ratio', 0),
+                        'total_trades': best_result.get('total_trades', 0),
+                        'buy_hold_return': buy_hold_return,
+                        'beats_buyhold': True
+                    }
 
-                htf_info = f" + HTF{htf_period}" if htf_filter else ""
-                print(f"  Best: {base_strat}{htf_info} | Params: {opt_params}")
-                print(f"        Win: {best_result.get('win_rate', 0):.1f}% | "
-                      f"PF: {best_result.get('profit_factor', 0):.2f} | "
-                      f"Return: {best_result.get('total_return_pct', 0):.1f}%")
+                    htf_info = f" + HTF{htf_period}" if htf_filter else ""
+                    print(f"  Best: {base_strat}{htf_info} | Params: {opt_params}")
+                    print(f"        Return: {strategy_return:.1f}% vs B&H: {buy_hold_return:.1f}% -> BEATS B&H")
+                else:
+                    # Buy & Hold wins - assign BUYHOLD
+                    assignments[symbol] = {
+                        'strategy': 'BUYHOLD',
+                        'strategy_key': 'BUYHOLD',
+                        'params': {},
+                        'htf_filter': False,
+                        'htf_period': None,
+                        'win_rate': 100.0,  # B&H is always 1 "winning" trade
+                        'profit_factor': float('inf') if buy_hold_return > 0 else 0,
+                        'total_return_pct': buy_hold_return,
+                        'sharpe_ratio': 0,
+                        'total_trades': 1,
+                        'buy_hold_return': buy_hold_return,
+                        'beats_buyhold': False,
+                        'best_strategy_return': strategy_return
+                    }
+
+                    print(f"  Best strategy: {base_strat} = {strategy_return:.1f}%")
+                    print(f"        B&H: {buy_hold_return:.1f}% -> USING BUY & HOLD")
             else:
-                print(f"  No suitable strategy found")
-                assignments[symbol] = {'strategy': 'EXCLUDED', 'reason': 'No profitable strategy'}
+                # No profitable strategy found - use Buy & Hold
+                assignments[symbol] = {
+                    'strategy': 'BUYHOLD',
+                    'strategy_key': 'BUYHOLD',
+                    'params': {},
+                    'htf_filter': False,
+                    'htf_period': None,
+                    'total_return_pct': buy_hold_return,
+                    'buy_hold_return': buy_hold_return,
+                    'beats_buyhold': False,
+                    'reason': 'No profitable strategy found'
+                }
+                print(f"  No profitable strategy -> USING BUY & HOLD ({buy_hold_return:.1f}%)")
 
         except Exception as e:
             print(f"  Error: {e}")
