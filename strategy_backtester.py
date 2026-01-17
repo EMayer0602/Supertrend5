@@ -6,6 +6,8 @@ Tests all symbols with multiple strategies and assigns each to its best strategy
 
 Strategies: JMA, Supertrend, SMA, KAMA, EMA, Buy&Hold (each with/without HTF JMA filter)
 
+Data Source: Interactive Brokers TWS (via ib_insync)
+
 Optimization:
 - Optimizes over last 6 months of data
 - Supports daily OR hourly bars
@@ -27,12 +29,23 @@ Usage:
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 import json
 import argparse
 import os
+import asyncio
+
+# Fix for Python 3.10+ event loop issue with ib_insync
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+from ib_insync import IB, Stock, util
+
+# Global IB connection
+_ib_connection = None
 
 # =============================================================================
 # CONSTANTS
@@ -576,31 +589,159 @@ def generate_param_combinations(param_grid: Dict) -> List[Dict]:
 
 
 # =============================================================================
-# DATA DOWNLOAD FUNCTIONS
+# IB CONNECTION FUNCTIONS
+# =============================================================================
+
+def get_ib_connection(host: str = '127.0.0.1', port: int = 7497, client_id: int = 20) -> IB:
+    """Get or create IB connection
+
+    Args:
+        host: TWS host (default localhost)
+        port: TWS port (7497 for paper, 7496 for live)
+        client_id: Unique client ID
+    """
+    global _ib_connection
+
+    if _ib_connection is None or not _ib_connection.isConnected():
+        _ib_connection = IB()
+        _ib_connection.connect(host, port, clientId=client_id)
+        print(f"Connected to TWS at {host}:{port}")
+
+    return _ib_connection
+
+
+def disconnect_ib():
+    """Disconnect from IB"""
+    global _ib_connection
+    if _ib_connection and _ib_connection.isConnected():
+        _ib_connection.disconnect()
+        print("Disconnected from TWS")
+    _ib_connection = None
+
+
+# =============================================================================
+# DATA DOWNLOAD FUNCTIONS (from TWS)
 # =============================================================================
 
 def download_data(symbol: str, timeframe: str = TIMEFRAME_DAILY, months: int = 12) -> pd.DataFrame:
-    """Download historical data for a symbol
+    """Download historical data for a symbol from TWS
 
     Args:
         symbol: Stock ticker
         timeframe: 'daily' or 'hourly'
         months: Number of months of data to download
     """
-    ticker = yf.Ticker(symbol)
+    ib = get_ib_connection()
 
-    if timeframe == TIMEFRAME_HOURLY:
-        # yfinance limits hourly data to ~730 days
-        # Use 1h interval
-        df = ticker.history(period=f'{min(months * 30, 730)}d', interval='1h')
+    # Create contract
+    contract = Stock(symbol, 'SMART', 'USD')
+    ib.qualifyContracts(contract)
+
+    # Calculate duration string
+    if months <= 12:
+        duration = f'{months} M'
     else:
-        # Daily data
-        df = ticker.history(period=f'{months}mo')
+        years = months // 12
+        duration = f'{years} Y'
 
-    if df.empty:
+    # Bar size based on timeframe
+    if timeframe == TIMEFRAME_HOURLY:
+        bar_size = '1 hour'
+    else:
+        bar_size = '1 day'
+
+    # Request historical data
+    bars = ib.reqHistoricalData(
+        contract,
+        endDateTime='',  # Now
+        durationStr=duration,
+        barSizeSetting=bar_size,
+        whatToShow='TRADES',
+        useRTH=True,  # Regular trading hours only
+        formatDate=1
+    )
+
+    if not bars:
         raise ValueError(f"No data available for {symbol}")
 
+    # Convert to DataFrame
+    df = util.df(bars)
+    df.set_index('date', inplace=True)
+
+    # Rename columns to match expected format
+    df.rename(columns={
+        'open': 'Open',
+        'high': 'High',
+        'low': 'Low',
+        'close': 'Close',
+        'volume': 'Volume'
+    }, inplace=True)
+
     return df
+
+
+def download_data_bulk(symbols: List[str], timeframe: str = TIMEFRAME_DAILY,
+                       months: int = 12) -> Dict[str, pd.DataFrame]:
+    """Download historical data for multiple symbols from TWS
+
+    Args:
+        symbols: List of stock tickers
+        timeframe: 'daily' or 'hourly'
+        months: Number of months of data to download
+
+    Returns:
+        Dict mapping symbol to DataFrame
+    """
+    ib = get_ib_connection()
+    data = {}
+
+    # Bar size based on timeframe
+    if timeframe == TIMEFRAME_HOURLY:
+        bar_size = '1 hour'
+    else:
+        bar_size = '1 day'
+
+    # Calculate duration string
+    if months <= 12:
+        duration = f'{months} M'
+    else:
+        years = months // 12
+        duration = f'{years} Y'
+
+    for symbol in symbols:
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            ib.qualifyContracts(contract)
+
+            bars = ib.reqHistoricalData(
+                contract,
+                endDateTime='',
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow='TRADES',
+                useRTH=True,
+                formatDate=1
+            )
+
+            if bars:
+                df = util.df(bars)
+                df.set_index('date', inplace=True)
+                df.rename(columns={
+                    'open': 'Open',
+                    'high': 'High',
+                    'low': 'Low',
+                    'close': 'Close',
+                    'volume': 'Volume'
+                }, inplace=True)
+                data[symbol] = df
+
+            # Small delay to avoid pacing violations
+            ib.sleep(0.5)
+
+        except Exception as e:
+            print(f"  Error downloading {symbol}: {e}")
+
+    return data
 
 
 def split_optimization_simulation(df: pd.DataFrame, opt_months: int = 6, sim_months: int = 6) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -738,8 +879,15 @@ def find_best_strategy(results: Dict, min_trades: int = 3) -> Tuple[str, Dict]:
 
 
 def optimize_all_symbols(symbols: List[str], capital: float = DEFAULT_CAPITAL,
-                         period: str = '2y') -> Dict:
-    """Optimize all symbols and assign to best strategies with optimal parameters"""
+                         months: int = 12, timeframe: str = TIMEFRAME_DAILY) -> Dict:
+    """Optimize all symbols and assign to best strategies with optimal parameters
+
+    Args:
+        symbols: List of stock tickers
+        capital: Initial capital
+        months: Number of months of data (default 12 = 1 year)
+        timeframe: 'daily' or 'hourly'
+    """
     assignments = {}
     all_results = {}
 
@@ -749,15 +897,15 @@ def optimize_all_symbols(symbols: List[str], capital: float = DEFAULT_CAPITAL,
         for s in STRATEGIES.keys()
     )
     print(f"\nTesting {len(symbols)} symbols with ~{total_combos} strategy/param combinations each...")
+    print(f"Data source: TWS ({months} months, {timeframe})")
     print("=" * 80)
 
     for i, symbol in enumerate(symbols):
         print(f"\n[{i+1}/{len(symbols)}] Testing {symbol}...")
 
         try:
-            # Download data
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period)
+            # Download data from TWS
+            df = download_data(symbol, timeframe, months)
 
             if df.empty or len(df) < 100:
                 print(f"  Skipping {symbol}: insufficient data")
@@ -1110,12 +1258,18 @@ if __name__ == '__main__':
             avg_sim_wr = sum(r['simulation']['win_rate'] for r in results.values()) / len(results)
             print(f"Avg Optimization Win Rate: {avg_opt_wr:.1f}%")
             print(f"Avg Simulation Win Rate: {avg_sim_wr:.1f}%")
+
+        # Disconnect from TWS
+        disconnect_ib()
     else:
-        # Run standard optimization (backward compatible)
+        # Run standard optimization (1 year data from TWS)
         print(f"\nMode: STANDARD (test all strategies)")
-        assignments, all_results = optimize_all_symbols(symbols, args.capital, '2y')
+        assignments, all_results = optimize_all_symbols(symbols, args.capital, months=12, timeframe=args.timeframe)
 
         # Update categories file
         update_stock_categories(assignments, args.output)
+
+    # Disconnect from TWS
+    disconnect_ib()
 
     print("\nDone!")
