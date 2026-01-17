@@ -6,16 +6,23 @@ Tests all symbols with multiple strategies and assigns each to its best strategy
 
 Strategies: JMA, Supertrend, SMA, KAMA, EMA, Buy&Hold (each with/without HTF JMA filter)
 
+Optimization:
+- Optimizes over last 6 months of data
+- Supports daily OR hourly bars
+- HTF filter periods: 6, 8, 12 (hours for hourly, days for daily)
+- Manual trigger every 4 weeks
+- Simulates 6 months after optimization
+
 Position Sizing:
 - Amount per trade = Capital / 30 / entry_price (rounded)
 - Max 20 positions open at once
 - Entry fee deducted at entry
 - Exit fee deducted at exit
-- Capital = Capital + daily_pnl
 
 Usage:
     python strategy_backtester.py --symbols AAPL,MSFT,GOOGL --capital 100000
-    python strategy_backtester.py --all --capital 100000
+    python strategy_backtester.py --all --capital 100000 --timeframe hourly
+    python strategy_backtester.py --optimize --timeframe daily
 """
 
 import pandas as pd
@@ -35,6 +42,17 @@ POSITION_DIVISOR = 30  # Capital / 30 per trade
 MAX_POSITIONS = 20
 FEE_RATE = 0.001  # 0.1% per trade (entry + exit)
 TRAILING_STOP_PCT = 0.12  # 12% trailing stop
+
+# Optimization and simulation periods (in months)
+OPTIMIZATION_MONTHS = 6
+SIMULATION_MONTHS = 6
+
+# HTF filter periods: 6, 8, 12 (hours for hourly data, days for daily data)
+HTF_PERIODS = [6, 8, 12]
+
+# Timeframes
+TIMEFRAME_DAILY = 'daily'
+TIMEFRAME_HOURLY = 'hourly'
 
 # =============================================================================
 # INDICATOR CALCULATIONS
@@ -510,7 +528,55 @@ STRATEGIES = {
     'BUYHOLD': {'func': get_buyhold_signals, 'params': {}},
 }
 
-HTF_PERIODS = [50, 100, 150, 200]
+
+# =============================================================================
+# DATA DOWNLOAD FUNCTIONS
+# =============================================================================
+
+def download_data(symbol: str, timeframe: str = TIMEFRAME_DAILY, months: int = 12) -> pd.DataFrame:
+    """Download historical data for a symbol
+
+    Args:
+        symbol: Stock ticker
+        timeframe: 'daily' or 'hourly'
+        months: Number of months of data to download
+    """
+    ticker = yf.Ticker(symbol)
+
+    if timeframe == TIMEFRAME_HOURLY:
+        # yfinance limits hourly data to ~730 days
+        # Use 1h interval
+        df = ticker.history(period=f'{min(months * 30, 730)}d', interval='1h')
+    else:
+        # Daily data
+        df = ticker.history(period=f'{months}mo')
+
+    if df.empty:
+        raise ValueError(f"No data available for {symbol}")
+
+    return df
+
+
+def split_optimization_simulation(df: pd.DataFrame, opt_months: int = 6, sim_months: int = 6) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split data into optimization and simulation periods
+
+    Args:
+        df: Full historical data
+        opt_months: Months for optimization (first period)
+        sim_months: Months for simulation (second period)
+
+    Returns:
+        (optimization_df, simulation_df)
+    """
+    total_days = len(df)
+
+    # Calculate split point (optimization period first, then simulation)
+    opt_days = int(total_days * opt_months / (opt_months + sim_months))
+
+    opt_df = df.iloc[:opt_days].copy()
+    sim_df = df.iloc[opt_days:].copy()
+
+    return opt_df, sim_df
 
 
 def test_symbol_all_strategies(symbol: str, df: pd.DataFrame, capital: float = DEFAULT_CAPITAL) -> Dict:
@@ -677,6 +743,136 @@ def update_stock_categories(assignments: Dict, output_file: str = 'stock_categor
 
 
 # =============================================================================
+# OPTIMIZE AND SIMULATE
+# =============================================================================
+
+def optimize_and_simulate(symbols: List[str], capital: float = DEFAULT_CAPITAL,
+                          timeframe: str = TIMEFRAME_DAILY) -> Dict:
+    """
+    Full optimization workflow:
+    1. Download 12 months of data
+    2. Use first 6 months for optimization (finding best strategy)
+    3. Use last 6 months for simulation (validating)
+    4. Store optimized parameters per symbol
+    """
+    results = {}
+    optimized_params = {}
+
+    print(f"\n{'='*80}")
+    print(f"OPTIMIZATION & SIMULATION")
+    print(f"{'='*80}")
+    print(f"Timeframe: {timeframe.upper()}")
+    print(f"HTF Periods: {HTF_PERIODS}")
+    print(f"Optimization: {OPTIMIZATION_MONTHS} months")
+    print(f"Simulation: {SIMULATION_MONTHS} months")
+    print(f"Symbols: {len(symbols)}")
+    print(f"{'='*80}\n")
+
+    for i, symbol in enumerate(symbols):
+        print(f"\n[{i+1}/{len(symbols)}] {symbol}")
+        print("-" * 40)
+
+        try:
+            # Download full data (12 months)
+            df = download_data(symbol, timeframe, OPTIMIZATION_MONTHS + SIMULATION_MONTHS)
+            print(f"  Data: {len(df)} bars ({timeframe})")
+
+            if len(df) < 100:
+                print(f"  SKIP: Insufficient data")
+                continue
+
+            # Split into optimization and simulation periods
+            opt_df, sim_df = split_optimization_simulation(df, OPTIMIZATION_MONTHS, SIMULATION_MONTHS)
+            print(f"  Optimization: {len(opt_df)} bars | Simulation: {len(sim_df)} bars")
+
+            # Phase 1: Optimize on first 6 months
+            print(f"  Phase 1: Optimizing...")
+            opt_results = test_symbol_all_strategies(symbol, opt_df, capital)
+            best_strat, best_opt_result = find_best_strategy(opt_results)
+
+            if not best_strat:
+                print(f"  SKIP: No profitable strategy in optimization")
+                continue
+
+            print(f"  Best Strategy: {best_strat}")
+            print(f"    Opt Win Rate: {best_opt_result.get('win_rate', 0):.1f}%")
+            print(f"    Opt Return: {best_opt_result.get('total_return_pct', 0):.1f}%")
+
+            # Phase 2: Simulate on last 6 months with best strategy
+            print(f"  Phase 2: Simulating...")
+            backtester = Backtester(initial_capital=capital)
+
+            # Get the strategy function and params
+            base_strat = best_strat.split('_HTF')[0]
+            if base_strat in STRATEGIES:
+                func = STRATEGIES[base_strat]['func']
+                params = STRATEGIES[base_strat]['params'].copy()
+
+                # Add HTF filter if applicable
+                if '_HTF' in best_strat:
+                    htf_period = int(best_strat.split('_HTF')[1])
+                    params['htf_filter'] = True
+                    params['htf_period'] = htf_period
+                else:
+                    params['htf_filter'] = False
+
+                # Run simulation
+                sim_df.attrs['symbol'] = symbol
+                signals = func(sim_df, **params)
+                sim_result = backtester.run(sim_df, signals)
+
+                print(f"    Sim Win Rate: {sim_result.get('win_rate', 0):.1f}%")
+                print(f"    Sim Return: {sim_result.get('total_return_pct', 0):.1f}%")
+                print(f"    Sim Trades: {sim_result.get('total_trades', 0)}")
+
+                # Store results
+                results[symbol] = {
+                    'strategy': best_strat,
+                    'optimization': {
+                        'win_rate': best_opt_result.get('win_rate', 0),
+                        'return_pct': best_opt_result.get('total_return_pct', 0),
+                        'trades': best_opt_result.get('total_trades', 0),
+                    },
+                    'simulation': {
+                        'win_rate': sim_result.get('win_rate', 0),
+                        'return_pct': sim_result.get('total_return_pct', 0),
+                        'trades': sim_result.get('total_trades', 0),
+                        'profit_factor': sim_result.get('profit_factor', 0),
+                    },
+                    'params': params,
+                    'timeframe': timeframe
+                }
+
+                optimized_params[symbol] = {
+                    'strategy': best_strat,
+                    'params': params,
+                    'timeframe': timeframe,
+                    'optimized_date': datetime.now().strftime("%Y-%m-%d")
+                }
+
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            continue
+
+    return results, optimized_params
+
+
+def save_optimized_params(params: Dict, filename: str = 'optimized_params.json'):
+    """Save optimized parameters to JSON file"""
+    output = {
+        '_comment': f"Optimized parameters for {len(params)} symbols",
+        '_last_optimized': datetime.now().strftime("%Y-%m-%d %H:%M"),
+        '_next_optimization': (datetime.now() + timedelta(weeks=4)).strftime("%Y-%m-%d"),
+        'symbols': params
+    }
+
+    with open(filename, 'w') as f:
+        json.dump(output, f, indent=4)
+
+    print(f"\nSaved optimized parameters to {filename}")
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -687,7 +883,7 @@ DEFAULT_SYMBOLS = [
     'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PXD', 'MPC', 'VLO', 'PSX', 'OXY',
     'JNJ', 'UNH', 'PFE', 'MRK', 'ABBV', 'LLY', 'BMY', 'AMGN', 'GILD', 'MRNA',
     'DIS', 'CMCSA', 'NFLX', 'T', 'VZ', 'TMUS',
-    'NKE', 'SBUX', 'MCD', 'HD', 'LOW', 'TGT', 'WMT', 'COST', 'AMZN',
+    'NKE', 'SBUX', 'MCD', 'HD', 'LOW', 'TGT', 'WMT', 'COST',
     'BA', 'LMT', 'RTX', 'NOC', 'GD',
     'UBER', 'LYFT', 'ABNB', 'BKNG', 'EXPE',
     'PLTR', 'SNOW', 'CRWD', 'ZS', 'NET', 'DDOG', 'MDB', 'SHOP'
@@ -699,7 +895,9 @@ if __name__ == '__main__':
     parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols')
     parser.add_argument('--all', action='store_true', help='Test all default symbols')
     parser.add_argument('--capital', type=float, default=DEFAULT_CAPITAL, help='Initial capital')
-    parser.add_argument('--period', type=str, default='2y', help='Data period (1y, 2y, 5y)')
+    parser.add_argument('--timeframe', type=str, default='daily', choices=['daily', 'hourly'],
+                        help='Timeframe: daily or hourly')
+    parser.add_argument('--optimize', action='store_true', help='Run full optimization + simulation')
     parser.add_argument('--output', type=str, default='stock_categories.json', help='Output file')
 
     args = parser.parse_args()
@@ -709,8 +907,11 @@ if __name__ == '__main__':
     elif args.all:
         symbols = DEFAULT_SYMBOLS
     else:
-        print("Usage: python strategy_backtester.py --symbols AAPL,MSFT,GOOGL")
-        print("       python strategy_backtester.py --all")
+        print("Usage:")
+        print("  python strategy_backtester.py --symbols AAPL,MSFT,GOOGL")
+        print("  python strategy_backtester.py --all")
+        print("  python strategy_backtester.py --all --timeframe hourly")
+        print("  python strategy_backtester.py --all --optimize --timeframe daily")
         exit(1)
 
     # Remove duplicates
@@ -719,13 +920,38 @@ if __name__ == '__main__':
     print(f"Strategy Backtester & Optimizer")
     print(f"================================")
     print(f"Capital: ${args.capital:,.2f}")
-    print(f"Period: {args.period}")
+    print(f"Timeframe: {args.timeframe}")
     print(f"Symbols: {len(symbols)}")
 
-    # Run optimization
-    assignments, all_results = optimize_all_symbols(symbols, args.capital, args.period)
+    if args.optimize:
+        # Run full optimization + simulation workflow
+        print(f"\nMode: OPTIMIZE + SIMULATE (6 months each)")
+        results, optimized_params = optimize_and_simulate(symbols, args.capital, args.timeframe)
 
-    # Update categories file
-    update_stock_categories(assignments, args.output)
+        # Save optimized parameters
+        save_optimized_params(optimized_params, 'optimized_params.json')
+
+        # Update stock categories based on results
+        assignments = {sym: {'strategy': data['strategy']} for sym, data in results.items()}
+        update_stock_categories(assignments, args.output)
+
+        # Print summary
+        print(f"\n{'='*80}")
+        print("OPTIMIZATION SUMMARY")
+        print(f"{'='*80}")
+        print(f"Symbols optimized: {len(results)}")
+
+        if results:
+            avg_opt_wr = sum(r['optimization']['win_rate'] for r in results.values()) / len(results)
+            avg_sim_wr = sum(r['simulation']['win_rate'] for r in results.values()) / len(results)
+            print(f"Avg Optimization Win Rate: {avg_opt_wr:.1f}%")
+            print(f"Avg Simulation Win Rate: {avg_sim_wr:.1f}%")
+    else:
+        # Run standard optimization (backward compatible)
+        print(f"\nMode: STANDARD (test all strategies)")
+        assignments, all_results = optimize_all_symbols(symbols, args.capital, '2y')
+
+        # Update categories file
+        update_stock_categories(assignments, args.output)
 
     print("\nDone!")
