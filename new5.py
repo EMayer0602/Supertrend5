@@ -89,6 +89,35 @@ def download_from_tws(symbol: str, days_back: int = 365) -> pd.DataFrame:
     return df
 
 # =============================================================================
+# SYMBOL LISTS - DOW 30, NASDAQ 100, ALL TICKERS
+# =============================================================================
+
+# DOW JONES 30 Components (as of 2024)
+DOW_30 = [
+    'AAPL', 'AMGN', 'AXP', 'BA', 'CAT', 'CRM', 'CSCO', 'CVX', 'DIS', 'DOW',
+    'GS', 'HD', 'HON', 'IBM', 'INTC', 'JNJ', 'JPM', 'KO', 'MCD', 'MMM',
+    'MRK', 'MSFT', 'NKE', 'PG', 'TRV', 'UNH', 'V', 'VZ', 'WBA', 'WMT'
+]
+
+# NASDAQ 100 Components (as of 2024)
+NASDAQ_100 = [
+    'AAPL', 'ABNB', 'ADBE', 'ADI', 'ADP', 'ADSK', 'AEP', 'AMAT', 'AMD', 'AMGN',
+    'AMZN', 'ANSS', 'ARM', 'ASML', 'AVGO', 'AZN', 'BIIB', 'BKNG', 'BKR', 'CCEP',
+    'CDNS', 'CDW', 'CEG', 'CHTR', 'CMCSA', 'COST', 'CPRT', 'CRWD', 'CSCO', 'CSGP',
+    'CSX', 'CTAS', 'CTSH', 'DASH', 'DDOG', 'DLTR', 'DXCM', 'EA', 'EXC', 'FANG',
+    'FAST', 'FTNT', 'GEHC', 'GFS', 'GILD', 'GOOG', 'GOOGL', 'HON', 'IDXX', 'ILMN',
+    'INTC', 'INTU', 'ISRG', 'KDP', 'KHC', 'KLAC', 'LIN', 'LRCX', 'LULU', 'MAR',
+    'MCHP', 'MDB', 'MDLZ', 'MELI', 'META', 'MNST', 'MRNA', 'MRVL', 'MSFT', 'MU',
+    'NFLX', 'NVDA', 'NXPI', 'ODFL', 'ON', 'ORLY', 'PANW', 'PAYX', 'PCAR', 'PDD',
+    'PEP', 'PYPL', 'QCOM', 'REGN', 'ROP', 'ROST', 'SBUX', 'SMCI', 'SNPS', 'SPLK',
+    'TEAM', 'TMUS', 'TSLA', 'TTD', 'TTWO', 'TXN', 'VRSK', 'WDAY', 'XEL', 'ZS'
+]
+
+# Combined unique tickers from DOW 30 + NASDAQ 100
+ALL_TICKERS = list(dict.fromkeys(DOW_30 + NASDAQ_100))  # Remove duplicates, preserve order
+
+
+# =============================================================================
 # CONFIGURATION
 # =============================================================================
 @dataclass
@@ -1456,57 +1485,55 @@ def test_ticker(symbol: str, days_back: int = 365) -> Dict:
 
 
 def run_multi_ticker_analysis():
-    """Test strategy on Dow Jones 30 and NASDAQ Top 20"""
+    """Test strategy on DOW 30 and NASDAQ 100"""
     print("="*80)
-    print("MULTI-TICKER ANALYSIS - DOW JONES 30 & NASDAQ TOP 20")
+    print("MULTI-TICKER ANALYSIS - DOW 30 & NASDAQ 100")
     print("="*80)
-
-    # Dow Jones 30 components
-    dow_jones = [
-        'AAPL', 'MSFT', 'JPM', 'V', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'CVX',
-        'MRK', 'KO', 'DIS', 'MCD', 'CSCO', 'VZ', 'NKE', 'INTC', 'IBM', 'GS',
-        'CAT', 'AXP', 'BA', 'HON', 'MMM', 'TRV', 'DOW', 'WBA', 'AMGN', 'CRM'
-    ]
-
-    # NASDAQ Top 20 (by market cap, excluding duplicates from Dow)
-    nasdaq_top = [
-        'NVDA', 'GOOG', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AVGO', 'PEP', 'COST', 'ADBE',
-        'NFLX', 'AMD', 'QCOM', 'TMUS', 'INTU', 'AMAT', 'ISRG', 'BKNG', 'ADP', 'PYPL'
-    ]
+    print(f"\nDOW 30: {len(DOW_30)} symbols")
+    print(f"NASDAQ 100: {len(NASDAQ_100)} symbols")
 
     all_results = []
 
-    # Test Dow Jones
+    # Test Dow Jones 30
     print("\n" + "-"*80)
-    print("TESTING DOW JONES 30")
+    print(f"TESTING DOW JONES 30 ({len(DOW_30)} symbols)")
     print("-"*80)
 
-    for i, symbol in enumerate(dow_jones, 1):
-        print(f"[{i}/30] Testing {symbol}...", end=" ")
+    for i, symbol in enumerate(DOW_30, 1):
+        print(f"[{i}/{len(DOW_30)}] Testing {symbol}...", end=" ")
         result = test_ticker(symbol, days_back=365)
+        result['index'] = 'DOW30'
         all_results.append(result)
 
         if 'error' in result:
             print(f"Error: {result['error']}")
         else:
             marker = "✓ BEATS" if result['beats_bh'] else "✗"
-            print(f"B&H: {result['buy_hold']:.1%} | Strategy: {result['strategy']:.1%} | {marker}")
+            strat_ret = result.get('strategy_return', 0)
+            print(f"B&H: {result['buy_hold']:.1%} | Strat: {strat_ret:.1%} | {result['assigned_strategy']} {marker}")
 
-    # Test NASDAQ Top 20
+    # Test NASDAQ 100
     print("\n" + "-"*80)
-    print("TESTING NASDAQ TOP 20")
+    print(f"TESTING NASDAQ 100 ({len(NASDAQ_100)} symbols)")
     print("-"*80)
 
-    for i, symbol in enumerate(nasdaq_top, 1):
-        print(f"[{i}/20] Testing {symbol}...", end=" ")
+    for i, symbol in enumerate(NASDAQ_100, 1):
+        # Skip if already tested in DOW 30
+        if any(r['symbol'] == symbol for r in all_results):
+            print(f"[{i}/{len(NASDAQ_100)}] {symbol}... (already tested in DOW 30)")
+            continue
+
+        print(f"[{i}/{len(NASDAQ_100)}] Testing {symbol}...", end=" ")
         result = test_ticker(symbol, days_back=365)
+        result['index'] = 'NASDAQ100'
         all_results.append(result)
 
         if 'error' in result:
             print(f"Error: {result['error']}")
         else:
             marker = "✓ BEATS" if result['beats_bh'] else "✗"
-            print(f"B&H: {result['buy_hold']:.1%} | Strategy: {result['strategy']:.1%} | {marker}")
+            strat_ret = result.get('strategy_return', 0)
+            print(f"B&H: {result['buy_hold']:.1%} | Strat: {strat_ret:.1%} | {result['assigned_strategy']} {marker}")
 
     # Summary
     print("\n" + "="*80)
@@ -1515,20 +1542,29 @@ def run_multi_ticker_analysis():
 
     valid_results = [r for r in all_results if 'error' not in r]
     beating_bh = [r for r in valid_results if r['beats_bh']]
+    supertrend_assigned = [r for r in valid_results if r.get('assigned_strategy') == 'SUPERTREND']
+    buyhold_assigned = [r for r in valid_results if r.get('assigned_strategy') == 'BUYHOLD']
 
     print(f"\nTotal tickers tested: {len(valid_results)}")
     print(f"Strategies that BEAT Buy & Hold: {len(beating_bh)} ({100*len(beating_bh)/len(valid_results):.1f}%)")
+    print(f"\nAssignments:")
+    print(f"  SUPERTREND: {len(supertrend_assigned)} symbols")
+    print(f"  BUYHOLD:    {len(buyhold_assigned)} symbols")
 
     if beating_bh:
-        print("\n--- WINNERS (Beat Buy & Hold) ---")
-        beating_bh.sort(key=lambda x: x['outperformance'], reverse=True)
-        for r in beating_bh:
-            print(f"  {r['symbol']}: Strategy {r['strategy']:.1%} vs B&H {r['buy_hold']:.1%} (+{r['outperformance']:.1%})")
+        print("\n--- SUPERTREND WINNERS (Beat Buy & Hold) ---")
+        beating_bh.sort(key=lambda x: x['outperformance'] or 0, reverse=True)
+        for r in beating_bh[:20]:  # Top 20
+            strat_ret = r.get('strategy_return', 0)
+            print(f"  {r['symbol']}: Strat {strat_ret:.1%} vs B&H {r['buy_hold']:.1%} (+{r['outperformance']:.1%})")
+        if len(beating_bh) > 20:
+            print(f"  ... and {len(beating_bh) - 20} more")
 
     # Average performance
     avg_bh = np.mean([r['buy_hold'] for r in valid_results])
-    avg_strat = np.mean([r['strategy'] for r in valid_results])
-    avg_outperf = np.mean([r['outperformance'] for r in valid_results if r['outperformance'] is not None])
+    avg_strat = np.mean([r.get('strategy_return', 0) for r in valid_results])
+    outperfs = [r['outperformance'] for r in valid_results if r['outperformance'] is not None]
+    avg_outperf = np.mean(outperfs) if outperfs else 0
 
     print(f"\n--- AVERAGES ---")
     print(f"  Avg Buy & Hold Return: {avg_bh:.1%}")
@@ -1740,31 +1776,16 @@ def run_enhanced_analysis():
 
 
 def screen_for_supertrend_stocks():
-    """Screen stocks to find best candidates for Supertrend strategy"""
+    """Screen DOW 30 + NASDAQ 100 stocks to find best candidates for Supertrend strategy"""
     print("="*80)
-    print("SUPERTREND STOCK SCREENER")
+    print("SUPERTREND STOCK SCREENER - DOW 30 + NASDAQ 100")
     print("="*80)
-    print("\nScreening stocks to find best candidates for Supertrend strategy...")
+    print("\nScreening all DOW 30 and NASDAQ 100 stocks...")
     print("(Looking for HIGH volatility stocks where Supertrend beats Buy & Hold)\n")
 
-    # Expanded list of popular stocks to screen
-    candidates = [
-        # Tech
-        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'ADBE',
-        'CRM', 'PYPL', 'SQ', 'SHOP', 'SNOW', 'PLTR', 'COIN', 'ROKU', 'DKNG', 'RBLX',
-        # Finance
-        'JPM', 'BAC', 'GS', 'MS', 'C', 'WFC', 'AXP', 'V', 'MA', 'SCHW',
-        # Healthcare
-        'JNJ', 'UNH', 'PFE', 'ABBV', 'MRK', 'LLY', 'BMY', 'AMGN', 'GILD', 'MRNA',
-        # Consumer
-        'WMT', 'HD', 'NKE', 'MCD', 'SBUX', 'TGT', 'LOW', 'COST', 'DIS', 'ABNB',
-        # Industrial
-        'BA', 'CAT', 'GE', 'HON', 'UPS', 'DE', 'LMT', 'RTX', 'MMM', 'F',
-        # Energy
-        'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'MPC', 'VLO', 'PSX', 'DVN',
-        # ETFs
-        'SPY', 'QQQ', 'IWM', 'DIA', 'ARKK', 'XLF', 'XLE', 'XLK', 'XLV', 'XLI'
-    ]
+    # Use all DOW 30 + NASDAQ 100 symbols (deduplicated)
+    candidates = ALL_TICKERS
+    print(f"Total candidates: {len(candidates)} unique symbols")
 
     suitable_stocks = []
     unsuitable_stocks = []
@@ -1778,31 +1799,32 @@ def screen_for_supertrend_stocks():
             print(f"Error: {char['error']}")
             continue
 
-        # Test strategy
-        result = test_ticker(symbol, 1825)
+        # Test strategy (1 year backtest)
+        result = test_ticker(symbol, 365)
         if 'error' in result:
             print(f"Error: {result['error']}")
             continue
 
         result.update(char)
 
-        # Determine suitability
+        # Determine suitability based on volatility and performance
+        outperf = result.get('outperformance', 0) or 0
         if char['vol_class'] == 'HIGH' and result.get('beats_bh', False):
             result['suitability'] = 'EXCELLENT'
             suitable_stocks.append(result)
-            print(f"✓ EXCELLENT - Vol={char['vol_class']}, Out={result['outperformance']:+.1%}")
+            print(f"✓ EXCELLENT - Vol={char['vol_class']}, {result['assigned_strategy']}, Out={outperf:+.1%}")
         elif char['vol_class'] in ['HIGH', 'MEDIUM'] and result.get('beats_bh', False):
             result['suitability'] = 'GOOD'
             suitable_stocks.append(result)
-            print(f"✓ GOOD - Vol={char['vol_class']}, Out={result['outperformance']:+.1%}")
+            print(f"✓ GOOD - Vol={char['vol_class']}, {result['assigned_strategy']}, Out={outperf:+.1%}")
         elif char['vol_class'] == 'LOW':
             result['suitability'] = 'BUY_HOLD'
             unsuitable_stocks.append(result)
-            print(f"→ B&H Better - Vol={char['vol_class']}, Out={result['outperformance']:+.1%}")
+            print(f"→ B&H Better - Vol={char['vol_class']}, BUYHOLD")
         else:
             result['suitability'] = 'NEUTRAL'
             unsuitable_stocks.append(result)
-            print(f"✗ Neutral - Vol={char['vol_class']}, Out={result.get('outperformance', 0):+.1%}")
+            print(f"✗ Neutral - Vol={char['vol_class']}, {result.get('assigned_strategy', 'N/A')}")
 
     # Results
     print("\n" + "="*80)
@@ -1812,10 +1834,11 @@ def screen_for_supertrend_stocks():
     print(f"\n--- BEST FOR SUPERTREND ({len(suitable_stocks)} stocks) ---")
     suitable_stocks.sort(key=lambda x: x.get('outperformance', 0) or 0, reverse=True)
 
-    for r in suitable_stocks[:20]:
+    for r in suitable_stocks[:30]:  # Show top 30
         outperf = r.get('outperformance', 0) or 0
         suit = r.get('suitability', 'N/A')
-        print(f"  {r['symbol']:<6} [{suit}] Vol={r['vol_class']}, Strat={r['strategy']:.1%}, B&H={r['buy_hold']:.1%}, Out={outperf:+.1%}")
+        strat_ret = r.get('strategy_return', 0) or 0
+        print(f"  {r['symbol']:<6} [{suit}] Vol={r['vol_class']}, Strat={strat_ret:.1%}, B&H={r['buy_hold']:.1%}, Out={outperf:+.1%}")
 
     print(f"\n--- RECOMMENDATION: USE BUY & HOLD ({len([u for u in unsuitable_stocks if u['vol_class'] == 'LOW'])} stocks) ---")
     low_vol = [u for u in unsuitable_stocks if u['vol_class'] == 'LOW']
@@ -1837,32 +1860,6 @@ def screen_for_supertrend_stocks():
             print(f"  {i}. {r['symbol']} - Outperformance: {r.get('outperformance', 0):+.1%}")
 
     return suitable_stocks, unsuitable_stocks
-
-
-# =============================================================================
-# ALL 81 TICKERS - Complete list for optimization
-# =============================================================================
-ALL_TICKERS = [
-    # Tech Giants
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'ADBE',
-    'CRM', 'ORCL', 'INTC', 'CSCO', 'QCOM', 'AVGO', 'TXN', 'MU', 'AMAT', 'LRCX',
-    # Finance
-    'JPM', 'BAC', 'WFC', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ', 'COIN',
-    # Energy
-    'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'PXD', 'MPC', 'VLO', 'PSX', 'OXY',
-    # Healthcare
-    'JNJ', 'UNH', 'PFE', 'MRK', 'ABBV', 'LLY', 'BMY', 'AMGN', 'GILD', 'MRNA',
-    # Media & Telecom
-    'DIS', 'CMCSA', 'T', 'VZ', 'TMUS',
-    # Consumer
-    'NKE', 'SBUX', 'MCD', 'HD', 'LOW', 'TGT', 'WMT', 'COST',
-    # Industrial & Defense
-    'BA', 'LMT', 'RTX', 'NOC', 'GD', 'CAT', 'DE', 'HON',
-    # Travel & Leisure
-    'UBER', 'LYFT', 'ABNB', 'BKNG', 'EXPE',
-    # Cloud & Software
-    'PLTR', 'SNOW', 'CRWD', 'ZS', 'NET', 'DDOG', 'MDB', 'SHOP'
-]
 
 
 def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dict:
