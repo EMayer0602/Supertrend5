@@ -10,6 +10,7 @@ Usage:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import yfinance as yf
 import numpy as np
@@ -657,7 +658,91 @@ def main():
 
     # Portfolio Table (with strategy from stock_categories.json)
     table_html = create_portfolio_table_html(portfolio, categories)
-    st.markdown(table_html, unsafe_allow_html=True)
+
+    # Wrap table in full HTML with styles for proper rendering
+    full_html = f"""
+    <html>
+    <head>
+    <style>
+        body {{
+            background-color: #000000;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        }}
+        .table-container {{
+            max-height: 500px;
+            overflow-y: auto;
+        }}
+        .portfolio-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            color: #ffffff;
+        }}
+        .portfolio-table th {{
+            background-color: #1a1a1a;
+            color: #888;
+            padding: 10px 8px;
+            text-align: right;
+            border-bottom: 2px solid #333;
+            font-weight: normal;
+            font-size: 11px;
+            position: sticky;
+            top: 0;
+        }}
+        .portfolio-table th:nth-child(1),
+        .portfolio-table th:nth-child(2) {{
+            text-align: left;
+        }}
+        .portfolio-table td {{
+            padding: 6px 8px;
+            text-align: right;
+            border-bottom: 1px solid #1a1a1a;
+        }}
+        .portfolio-table td:nth-child(1),
+        .portfolio-table td:nth-child(2) {{
+            text-align: left;
+        }}
+        .portfolio-table tr:hover {{
+            background-color: #1a1a1a;
+        }}
+        .total-row {{
+            background-color: #0a0a0a;
+            font-weight: bold;
+        }}
+        .total-row td {{
+            padding: 12px 8px;
+            border-top: 2px solid #333;
+        }}
+        .cell-positive {{
+            background-color: rgba(0, 100, 0, 0.4);
+            color: #00ff00;
+        }}
+        .cell-negative {{
+            background-color: rgba(100, 0, 0, 0.4);
+            color: #ff4444;
+        }}
+        .symbol-cell {{
+            color: #ffffff;
+            font-weight: bold;
+        }}
+        .positive {{ color: #00ff00; }}
+        .negative {{ color: #ff4444; }}
+        .neutral {{ color: #ffffff; }}
+        .info-blue {{ color: #00bfff; }}
+        .gray {{ color: #666666; }}
+    </style>
+    </head>
+    <body>
+    {table_html}
+    </body>
+    </html>
+    """
+
+    # Calculate height based on number of positions
+    table_height = min(600, 50 + len(portfolio) * 35)
+    components.html(full_html, height=table_height, scrolling=True)
 
     # Cash Section
     st.markdown(f'''
