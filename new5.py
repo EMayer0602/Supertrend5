@@ -1647,9 +1647,8 @@ def test_ticker(symbol: str, days_back: int = 365) -> Dict:
         # Check if any strategy beats B&H
         beats_bh = best_return > buy_hold_return and best_strategy != 'BUYHOLD'
 
-        # Compile all strategy returns for reference
-        all_returns = {name: data['return'] for name, data in strategy_results.items()}
-        all_returns['BUYHOLD'] = buy_hold_return
+        # Add BUYHOLD to strategy_results for completeness
+        strategy_results['BUYHOLD'] = {'return': buy_hold_return, 'params': {}}
 
         return {
             'symbol': symbol,
@@ -1663,8 +1662,8 @@ def test_ticker(symbol: str, days_back: int = 365) -> Dict:
             'assigned_strategy': best_strategy,
             'assigned_params': best_params,
             'assigned_return': best_return,
-            # All strategy results
-            'all_strategies': all_returns
+            # ALL strategies with BEST PARAMS for each
+            'all_strategies': strategy_results
         }
     except Exception as e:
         return {'symbol': symbol, 'error': str(e)}
