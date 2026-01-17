@@ -25,7 +25,14 @@ import json
 import time
 import os
 import pytz
+import asyncio
 from typing import Dict, List, Optional, Tuple
+
+# Fix for Python 3.10+ event loop issue with ib_insync
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 # Try to import ib_insync
 try:
