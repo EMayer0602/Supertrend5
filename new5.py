@@ -29,7 +29,7 @@ class TradingConfig:
     use_htf_filter: bool = True
 
     # Backtest Period
-    days_back: int = 730  # 2 years for better statistics
+    days_back: int = 365  # 1 year
 
 
 # =============================================================================
@@ -1065,11 +1065,11 @@ def main():
     print("SUPERTREND TRADING SYSTEM v5.0 - OPTIMIZED WITH HTF FILTER")
     print("="*60)
 
-    # Configuration - 5 years includes 2022 bear market!
+    # Configuration - 1 year backtest
     config = TradingConfig(
         symbol="MSFT",
         initial_capital=10000.0,
-        days_back=1825,  # 5 years - includes 2022 bear market
+        days_back=365,  # 1 year
         use_htf_filter=True
     )
 
@@ -1296,7 +1296,7 @@ def main():
 # =============================================================================
 # MULTI-TICKER ANALYSIS
 # =============================================================================
-def test_ticker(symbol: str, days_back: int = 1825) -> Dict:
+def test_ticker(symbol: str, days_back: int = 365) -> Dict:
     """Test a single ticker and return results"""
     config = TradingConfig(
         symbol=symbol,
@@ -1402,7 +1402,7 @@ def run_multi_ticker_analysis():
 
     for i, symbol in enumerate(dow_jones, 1):
         print(f"[{i}/30] Testing {symbol}...", end=" ")
-        result = test_ticker(symbol, days_back=1825)
+        result = test_ticker(symbol, days_back=365)
         all_results.append(result)
 
         if 'error' in result:
@@ -1418,7 +1418,7 @@ def run_multi_ticker_analysis():
 
     for i, symbol in enumerate(nasdaq_top, 1):
         print(f"[{i}/20] Testing {symbol}...", end=" ")
-        result = test_ticker(symbol, days_back=1825)
+        result = test_ticker(symbol, days_back=365)
         all_results.append(result)
 
         if 'error' in result:
@@ -1460,7 +1460,7 @@ def run_multi_ticker_analysis():
 # =============================================================================
 # ENHANCED ANALYSIS - MARKET CHARACTERISTICS
 # =============================================================================
-def analyze_stock_characteristics(symbol: str, days_back: int = 1825) -> Dict:
+def analyze_stock_characteristics(symbol: str, days_back: int = 365) -> Dict:
     """Analyze stock characteristics to determine strategy suitability"""
     try:
         end_date = datetime.now()
@@ -1572,7 +1572,7 @@ def run_enhanced_analysis():
 
     for symbol in test_stocks:
         print(f"Analyzing {symbol}...", end=" ")
-        char = analyze_stock_characteristics(symbol, 1825)
+        char = analyze_stock_characteristics(symbol, 365)
 
         if 'error' in char:
             print(f"Error: {char['error']}")
@@ -1582,7 +1582,7 @@ def run_enhanced_analysis():
         print(f"Vol: {char['vol_class']}, Trend: {char['trend_class']} ({char['trend_direction']}), Rec: {char['recommendation']}")
 
         # Also run strategy test
-        strat_result = test_ticker(symbol, 1825)
+        strat_result = test_ticker(symbol, 365)
         if 'error' not in strat_result:
             strat_result.update(char)
             strategy_results.append(strat_result)
@@ -1689,7 +1689,7 @@ def screen_for_supertrend_stocks():
         print(f"[{i}/{len(candidates)}] Screening {symbol}...", end=" ")
 
         # Analyze characteristics
-        char = analyze_stock_characteristics(symbol, 1825)
+        char = analyze_stock_characteristics(symbol, 365)
         if 'error' in char:
             print(f"Error: {char['error']}")
             continue
