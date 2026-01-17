@@ -718,13 +718,8 @@ def find_best_strategy(results: Dict, min_trades: int = 3) -> Tuple[str, Dict]:
         if result.get('total_trades', 0) < min_trades:
             continue
 
-        # Combined score: win_rate * 0.3 + profit_factor * 0.3 + total_return_pct * 0.2 + sharpe * 0.2
-        win_rate = result.get('win_rate', 0)
-        pf = min(result.get('profit_factor', 0), 10)  # Cap profit factor
-        ret = result.get('total_return_pct', -100)
-        sharpe = result.get('sharpe_ratio', 0)
-
-        score = win_rate * 0.3 + pf * 10 * 0.3 + ret * 0.2 + sharpe * 5 * 0.2
+        # Optimize for maximum PnL (total return)
+        score = result.get('total_return_pct', -100)
 
         if score > best_score:
             best_score = score
