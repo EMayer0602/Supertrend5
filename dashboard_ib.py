@@ -49,7 +49,7 @@ st.set_page_config(
     page_title="IB Portfolio Monitor",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # =============================================================================
@@ -494,6 +494,7 @@ def main():
         st.session_state.ib_conn = None
         st.session_state.connected = False
         st.session_state.last_refresh = None
+        st.session_state.auto_connect_tried = False
 
     # Check market hours
     market_open, market_status = is_ny_market_open()
@@ -503,7 +504,7 @@ def main():
         st.markdown("### IB Connection")
         host = st.text_input("Host", value="127.0.0.1")
         port = st.number_input("Port", value=7497, help="7497=TWS Paper, 7496=TWS Live")
-        client_id = st.number_input("Client ID", value=1, min_value=1)
+        client_id = st.number_input("Client ID", value=10, min_value=1, help="Use different ID if 'already connected' error")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -535,6 +536,18 @@ def main():
                     csv_path = export_portfolio_csv(portfolio)
                     if csv_path:
                         st.success(f"Exported to {csv_path}")
+
+    # Auto-connect on first load
+    if not st.session_state.connected and not st.session_state.auto_connect_tried and IB_AVAILABLE:
+        st.session_state.auto_connect_tried = True
+        try:
+            conn = IBConnection('127.0.0.1', 7497, 10)
+            if conn.connect():
+                st.session_state.ib_conn = conn
+                st.session_state.connected = True
+                st.rerun()
+        except:
+            pass  # Manual connect required
 
     # Load categories
     categories = load_stock_categories()
