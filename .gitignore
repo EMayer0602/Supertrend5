@@ -22,14 +22,11 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
-<<<<<<< Updated upstream
-=======
 
 # Config with sensitive data
 dashboard_config.json
 portfolio_history.json
-ib_paper_trader.log 
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
+
+# Log files
+ib_paper_trader.log
+*.log
