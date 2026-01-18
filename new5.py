@@ -2203,6 +2203,461 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
     return assignments
 
 
+# =============================================================================
+# HTF COMPARISON & MULTI-PORTFOLIO SIMULATION
+# =============================================================================
+
+def test_ticker_htf_comparison(symbol: str, days_back: int = 365) -> Dict:
+    """
+    Test a single ticker with ALL strategies, comparing WITH and WITHOUT HTF filter.
+    Returns best approach for each strategy variant.
+    """
+    config = TradingConfig(
+        symbol=symbol,
+        initial_capital=10000.0,
+        days_back=days_back,
+        use_htf_filter=False
+    )
+
+    try:
+        stock_data = download_from_tws(symbol, days_back)
+
+        if stock_data.empty or len(stock_data) < 100:
+            return {'symbol': symbol, 'error': 'No data'}
+
+        close_col = f'Close_{symbol}'
+        high_col = f'High_{symbol}'
+        low_col = f'Low_{symbol}'
+
+        high = stock_data[high_col].values
+        low = stock_data[low_col].values
+        close = stock_data[close_col].values
+        close_series = stock_data[close_col]
+
+        buy_hold_return = (close[-1] - close[0]) / close[0]
+
+        system = OptimizedTradingSystem(config)
+
+        # Get HTF direction for HTF-enabled tests
+        htf_direction = None
+        try:
+            htf_series = get_htf_trend(stock_data, symbol, 10, 3.0)
+            htf_direction = htf_series.values
+        except:
+            pass
+
+        results = {}
+
+        # =================================================================
+        # Test each strategy WITH and WITHOUT HTF filter
+        # =================================================================
+
+        # SUPERTREND
+        for use_htf in [False, True]:
+            htf_label = "_HTF" if use_htf else ""
+            best_return = -np.inf
+            best_params = None
+            for period in [10, 14, 20]:
+                for mult in [2.0, 3.0, 4.0]:
+                    try:
+                        supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
+                        htf_dir = htf_direction if use_htf else None
+                        buy_signals, sell_signals = generate_signals_vectorized(
+                            close, supertrend, direction, htf_dir, use_htf, "trend_following"
+                        )
+                        ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                        if ret > best_return:
+                            best_return = ret
+                            best_params = {'period': period, 'multiplier': mult}
+                    except:
+                        pass
+            if best_return > -np.inf:
+                results[f'SUPERTREND{htf_label}'] = {'return': float(best_return), 'params': best_params, 'htf': use_htf}
+
+        # JMA Crossover
+        for use_htf in [False, True]:
+            htf_label = "_HTF" if use_htf else ""
+            best_return = -np.inf
+            best_params = None
+            for fast in [7, 10, 14]:
+                for slow in [21, 30, 50]:
+                    if fast >= slow:
+                        continue
+                    try:
+                        jma_fast = calculate_jma(close_series, fast).values
+                        jma_slow = calculate_jma(close_series, slow).values
+                        buy_signals, sell_signals = get_ma_crossover_signals(close, jma_fast, jma_slow)
+                        # Apply HTF filter manually if enabled
+                        if use_htf and htf_direction is not None:
+                            buy_signals = buy_signals & (htf_direction == 1)
+                        ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                        if ret > best_return:
+                            best_return = ret
+                            best_params = {'fast': fast, 'slow': slow}
+                    except:
+                        pass
+            if best_return > -np.inf:
+                results[f'JMA{htf_label}'] = {'return': float(best_return), 'params': best_params, 'htf': use_htf}
+
+        # KAMA Crossover
+        for use_htf in [False, True]:
+            htf_label = "_HTF" if use_htf else ""
+            best_return = -np.inf
+            best_params = None
+            for period in [10, 14, 20]:
+                for signal in [10, 14, 21]:
+                    try:
+                        kama = calculate_kama(close_series, period).values
+                        signal_line = calculate_sma(close_series, signal).values
+                        buy_signals, sell_signals = get_ma_crossover_signals(close, kama, signal_line)
+                        if use_htf and htf_direction is not None:
+                            buy_signals = buy_signals & (htf_direction == 1)
+                        ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                        if ret > best_return:
+                            best_return = ret
+                            best_params = {'period': period, 'signal': signal}
+                    except:
+                        pass
+            if best_return > -np.inf:
+                results[f'KAMA{htf_label}'] = {'return': float(best_return), 'params': best_params, 'htf': use_htf}
+
+        # EMA Crossover
+        for use_htf in [False, True]:
+            htf_label = "_HTF" if use_htf else ""
+            best_return = -np.inf
+            best_params = None
+            for fast in [8, 12, 20]:
+                for slow in [21, 26, 50]:
+                    if fast >= slow:
+                        continue
+                    try:
+                        ema_fast = calculate_ema(close_series, fast).values
+                        ema_slow = calculate_ema(close_series, slow).values
+                        buy_signals, sell_signals = get_ma_crossover_signals(close, ema_fast, ema_slow)
+                        if use_htf and htf_direction is not None:
+                            buy_signals = buy_signals & (htf_direction == 1)
+                        ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                        if ret > best_return:
+                            best_return = ret
+                            best_params = {'fast': fast, 'slow': slow}
+                    except:
+                        pass
+            if best_return > -np.inf:
+                results[f'EMA{htf_label}'] = {'return': float(best_return), 'params': best_params, 'htf': use_htf}
+
+        # SMA Crossover
+        for use_htf in [False, True]:
+            htf_label = "_HTF" if use_htf else ""
+            best_return = -np.inf
+            best_params = None
+            for fast in [10, 20, 30]:
+                for slow in [50, 100, 200]:
+                    if fast >= slow:
+                        continue
+                    try:
+                        sma_fast = calculate_sma(close_series, fast).values
+                        sma_slow = calculate_sma(close_series, slow).values
+                        buy_signals, sell_signals = get_ma_crossover_signals(close, sma_fast, sma_slow)
+                        if use_htf and htf_direction is not None:
+                            buy_signals = buy_signals & (htf_direction == 1)
+                        ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                        if ret > best_return:
+                            best_return = ret
+                            best_params = {'fast': fast, 'slow': slow}
+                    except:
+                        pass
+            if best_return > -np.inf:
+                results[f'SMA{htf_label}'] = {'return': float(best_return), 'params': best_params, 'htf': use_htf}
+
+        # Add B&H
+        results['BUYHOLD'] = {'return': float(buy_hold_return), 'params': {}, 'htf': False}
+
+        # Find overall best
+        best_strategy = None
+        best_return = -np.inf
+        for strat_name, strat_data in results.items():
+            if strat_data['return'] > best_return:
+                best_return = strat_data['return']
+                best_strategy = strat_name
+
+        return {
+            'symbol': symbol,
+            'best_strategy': best_strategy,
+            'best_return': float(best_return),
+            'buy_hold': float(buy_hold_return),
+            'all_results': results
+        }
+    except Exception as e:
+        return {'symbol': symbol, 'error': str(e)}
+
+
+def run_htf_comparison_and_categorize(days_back: int = 180, min_pnl: float = 0.30):
+    """
+    Run comprehensive HTF comparison on all tickers.
+    Categorize by strategy with PnL >= min_pnl (default 30%).
+
+    Categories:
+    - STRATEGY_HTF: Strategy with HTF filter, PnL >= 30%
+    - STRATEGY_NOHTF: Strategy without HTF filter, PnL >= 30%
+    - BUYHOLD: Buy & Hold is best with PnL >= 30%
+    - UNDERPERFORM: Best PnL < 30%
+    """
+    import json
+
+    def sanitize_for_json(obj):
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_for_json(item) for item in obj]
+        elif isinstance(obj, (np.bool_, np.generic)):
+            return obj.item()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return obj
+
+    print("="*80)
+    print("HTF COMPARISON & CATEGORIZATION")
+    print(f"Period: {days_back} days ({days_back/30:.0f} months)")
+    print(f"Minimum PnL threshold: {min_pnl:.0%}")
+    print("="*80)
+
+    # Categories
+    categories = {
+        'SUPERTREND_HTF': [],
+        'SUPERTREND_NOHTF': [],
+        'JMA_HTF': [],
+        'JMA_NOHTF': [],
+        'KAMA_HTF': [],
+        'KAMA_NOHTF': [],
+        'EMA_HTF': [],
+        'EMA_NOHTF': [],
+        'SMA_HTF': [],
+        'SMA_NOHTF': [],
+        'BUYHOLD': [],
+        'UNDERPERFORM': []
+    }
+
+    all_results = {}
+    error_count = 0
+
+    for i, symbol in enumerate(ALL_TICKERS, 1):
+        print(f"\n[{i}/{len(ALL_TICKERS)}] {symbol}...", end=" ")
+
+        result = test_ticker_htf_comparison(symbol, days_back)
+
+        if 'error' in result:
+            print(f"ERROR: {result['error']}")
+            error_count += 1
+            continue
+
+        best = result['best_strategy']
+        best_ret = result['best_return']
+        bh_ret = result['buy_hold']
+
+        all_results[symbol] = result
+
+        # Categorize based on best strategy and PnL threshold
+        if best_ret < min_pnl:
+            categories['UNDERPERFORM'].append({
+                'symbol': symbol,
+                'best_strategy': best,
+                'return': best_ret,
+                'buy_hold': bh_ret
+            })
+            marker = "⚠"
+            cat = "UNDERPERFORM"
+        elif best == 'BUYHOLD':
+            categories['BUYHOLD'].append({
+                'symbol': symbol,
+                'return': bh_ret,
+                'params': {}
+            })
+            marker = "📈"
+            cat = "BUYHOLD"
+        else:
+            # Determine category based on strategy name
+            base_strat = best.replace('_HTF', '')
+            has_htf = '_HTF' in best
+            cat_key = f"{base_strat}_{'HTF' if has_htf else 'NOHTF'}"
+
+            strat_data = result['all_results'].get(best, {})
+            categories[cat_key].append({
+                'symbol': symbol,
+                'return': best_ret,
+                'params': strat_data.get('params', {}),
+                'buy_hold': bh_ret
+            })
+            marker = "✓" if has_htf else "○"
+            cat = cat_key
+
+        print(f"{best:<15} | {best_ret:+.1%} (B&H: {bh_ret:+.1%}) | {marker} {cat}")
+
+    # Summary
+    print("\n" + "="*80)
+    print("CATEGORIZATION SUMMARY (PnL >= {:.0%})".format(min_pnl))
+    print("="*80)
+
+    total_valid = len(ALL_TICKERS) - error_count
+    print(f"\nTotal tested: {total_valid} | Errors: {error_count}")
+
+    print("\n--- CATEGORIES ---")
+    for cat, items in categories.items():
+        if items:
+            avg_ret = np.mean([x['return'] for x in items]) if items else 0
+            print(f"\n{cat}: {len(items)} symbols (avg return: {avg_ret:+.1%})")
+            for item in sorted(items, key=lambda x: x['return'], reverse=True)[:5]:
+                params_str = ', '.join(f"{k}={v}" for k, v in item.get('params', {}).items()) if item.get('params') else ""
+                print(f"    {item['symbol']:<6}: {item['return']:+.1%} | {params_str}")
+            if len(items) > 5:
+                print(f"    ... and {len(items)-5} more")
+
+    # Save categorized results
+    output = {
+        '_comment': 'HTF Comparison Results - Categorized by Strategy',
+        '_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+        '_days_back': days_back,
+        '_min_pnl': min_pnl,
+        '_summary': {cat: len(items) for cat, items in categories.items()},
+        'categories': categories,
+        'all_results': {sym: res for sym, res in all_results.items() if 'error' not in res}
+    }
+
+    with open('htf_categorized_results.json', 'w') as f:
+        json.dump(sanitize_for_json(output), f, indent=4)
+    print(f"\nResults saved to: htf_categorized_results.json")
+
+    return categories, all_results
+
+
+def run_multi_portfolio_simulation(categories: Dict = None, days_back: int = 180):
+    """
+    Run multi-portfolio simulation based on categorized strategies.
+    Each portfolio uses symbols from a specific category with their optimal parameters.
+    """
+    import json
+
+    def sanitize_for_json(obj):
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_for_json(item) for item in obj]
+        elif isinstance(obj, (np.bool_, np.generic)):
+            return obj.item()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return obj
+
+    # Load categories if not provided
+    if categories is None:
+        try:
+            with open('htf_categorized_results.json', 'r') as f:
+                data = json.load(f)
+                categories = data.get('categories', {})
+        except:
+            print("ERROR: No categorized results found. Run --htf-compare first.")
+            return
+
+    print("\n" + "="*80)
+    print("MULTI-PORTFOLIO SIMULATION")
+    print(f"Period: {days_back} days ({days_back/30:.0f} months)")
+    print("="*80)
+
+    portfolio_results = {}
+    initial_capital_per_stock = 10000.0
+
+    for cat_name, symbols_data in categories.items():
+        if not symbols_data or cat_name == 'UNDERPERFORM':
+            continue
+
+        print(f"\n--- Portfolio: {cat_name} ({len(symbols_data)} symbols) ---")
+
+        portfolio_returns = []
+        portfolio_details = []
+
+        for item in symbols_data:
+            symbol = item['symbol']
+            params = item.get('params', {})
+            stored_return = item.get('return', 0)
+
+            # Use stored return from categorization
+            portfolio_returns.append(stored_return)
+            portfolio_details.append({
+                'symbol': symbol,
+                'return': stored_return,
+                'params': params
+            })
+            print(f"  {symbol:<6}: {stored_return:+.1%}")
+
+        if portfolio_returns:
+            # Portfolio statistics
+            avg_return = np.mean(portfolio_returns)
+            total_return = np.sum(portfolio_returns) / len(portfolio_returns)  # Equal weighted
+            min_return = np.min(portfolio_returns)
+            max_return = np.max(portfolio_returns)
+            winners = sum(1 for r in portfolio_returns if r > 0)
+            win_rate = winners / len(portfolio_returns)
+
+            portfolio_results[cat_name] = {
+                'num_symbols': len(symbols_data),
+                'avg_return': float(avg_return),
+                'total_return': float(total_return),
+                'min_return': float(min_return),
+                'max_return': float(max_return),
+                'win_rate': float(win_rate),
+                'symbols': portfolio_details
+            }
+
+            print(f"\n  Portfolio Stats:")
+            print(f"    Avg Return:  {avg_return:+.1%}")
+            print(f"    Min/Max:     {min_return:+.1%} / {max_return:+.1%}")
+            print(f"    Win Rate:    {win_rate:.0%} ({winners}/{len(portfolio_returns)})")
+
+    # Overall comparison
+    print("\n" + "="*80)
+    print("PORTFOLIO COMPARISON")
+    print("="*80)
+    print(f"\n{'Portfolio':<20} {'Symbols':>8} {'Avg Ret':>10} {'Win Rate':>10} {'Best':>10} {'Worst':>10}")
+    print("-"*70)
+
+    sorted_portfolios = sorted(portfolio_results.items(), key=lambda x: x[1]['avg_return'], reverse=True)
+    for name, stats in sorted_portfolios:
+        print(f"{name:<20} {stats['num_symbols']:>8} {stats['avg_return']:>+9.1%} {stats['win_rate']:>9.0%} {stats['max_return']:>+9.1%} {stats['min_return']:>+9.1%}")
+
+    # Save results
+    output = {
+        '_comment': 'Multi-Portfolio Simulation Results',
+        '_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+        '_days_back': days_back,
+        'portfolios': portfolio_results
+    }
+
+    with open('multi_portfolio_results.json', 'w') as f:
+        json.dump(sanitize_for_json(output), f, indent=4)
+    print(f"\nResults saved to: multi_portfolio_results.json")
+
+    return portfolio_results
+
+
+def run_full_htf_analysis(days_back: int = 180, min_pnl: float = 0.30):
+    """
+    Run full HTF analysis: comparison, categorization, and portfolio simulation.
+    """
+    print("="*80)
+    print("FULL HTF ANALYSIS & MULTI-PORTFOLIO SIMULATION")
+    print("="*80)
+
+    # Step 1: Run comparison and categorization
+    categories, all_results = run_htf_comparison_and_categorize(days_back, min_pnl)
+
+    # Step 2: Run multi-portfolio simulation
+    portfolio_results = run_multi_portfolio_simulation(categories, days_back)
+
+    # Disconnect
+    disconnect_ib()
+
+    return categories, portfolio_results
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--multi":
@@ -2215,8 +2670,19 @@ if __name__ == "__main__":
         screen_for_supertrend_stocks()
         disconnect_ib()
     elif len(sys.argv) > 1 and sys.argv[1] == "--all":
-        # Optimize all 81 tickers
+        # Optimize all tickers
         optimize_all_tickers(days_back=365)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--htf-compare":
+        # HTF comparison and categorization (6 months, 30% threshold)
+        run_htf_comparison_and_categorize(days_back=180, min_pnl=0.30)
+        disconnect_ib()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--htf-portfolio":
+        # Multi-portfolio simulation from saved categories
+        run_multi_portfolio_simulation(days_back=180)
+        disconnect_ib()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--htf-full":
+        # Full analysis: compare + categorize + portfolio simulation
+        run_full_htf_analysis(days_back=180, min_pnl=0.30)
     else:
         main()
         disconnect_ib()
