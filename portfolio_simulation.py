@@ -278,7 +278,13 @@ class PortfolioSimulator:
                                   signals: Dict[str, Dict]):
         """
         Process strategy signals for the day.
-        signals format: {symbol: {'action': 'BUY'/'SELL'/'SHORT'/'COVER', 'strategy': 'SUPERTREND', ...}}
+        signals format: {symbol: {'action': 'BUY'/'SELL'/'SHORT'/'COVER', 'strategy': 'SUPERTREND', 'next_action': ...}}
+
+        Actions:
+        - BUY: Open long position
+        - SELL: Close long position, then optionally SHORT if next_action='SHORT'
+        - SHORT: Open short position
+        - COVER: Close short position, then optionally BUY if next_action='BUY'
         """
         for symbol, signal in signals.items():
             if symbol not in prices:
@@ -287,6 +293,7 @@ class PortfolioSimulator:
             price = prices[symbol]
             action = signal.get('action')
             strategy = signal.get('strategy', 'STRATEGY')
+            next_action = signal.get('next_action')
 
             if action == 'BUY':
                 # Open long position
@@ -303,6 +310,13 @@ class PortfolioSimulator:
                     if pos.direction == 'LONG' and pos.strategy != 'BUYHOLD':
                         self.close_position(symbol, price, date, "SIGNAL_SELL")
 
+                        # Then open short if next_action is SHORT
+                        if next_action == 'SHORT':
+                            strategy_count = sum(1 for p in self.open_positions.values()
+                                                if p.strategy != 'BUYHOLD')
+                            if strategy_count < self.strategy_positions:
+                                self.open_position(symbol, 'SHORT', price, date, strategy)
+
             elif action == 'SHORT':
                 # Open short position
                 if symbol not in self.open_positions:
@@ -317,6 +331,13 @@ class PortfolioSimulator:
                     pos = self.open_positions[symbol]
                     if pos.direction == 'SHORT':
                         self.close_position(symbol, price, date, "SIGNAL_COVER")
+
+                        # Then open long if next_action is BUY
+                        if next_action == 'BUY':
+                            strategy_count = sum(1 for p in self.open_positions.values()
+                                                if p.strategy != 'BUYHOLD')
+                            if strategy_count < self.strategy_positions:
+                                self.open_position(symbol, 'LONG', price, date, strategy)
 
     def update_daily(self, date: datetime, prices: Dict[str, float], prev_prices: Dict[str, float]):
         """Update all positions and calculate daily PnL"""
@@ -365,7 +386,19 @@ class PortfolioSimulator:
         print(f"Loaded data for {len(self.price_data)} symbols")
 
     def generate_strategy_signals(self, symbol: str, date: datetime) -> Optional[Dict]:
-        """Generate trading signal for a symbol based on its assigned strategy"""
+        """
+        Generate trading signal for a symbol based on its assigned strategy.
+
+        Returns signals:
+        - BUY: Bullish crossover (close long position if short, or open long)
+        - SELL: Bearish crossover (close long position)
+        - SHORT: Bearish crossover (open short position)
+        - COVER: Bullish crossover (close short position)
+
+        Logic:
+        - Bullish signal → If short: COVER, then BUY
+        - Bearish signal → If long: SELL, then SHORT
+        """
         if symbol not in self.price_data:
             return None
 
@@ -394,6 +427,11 @@ class PortfolioSimulator:
         use_htf = '_HTF' in strategy
         base_strategy = strategy.replace('_HTF', '').replace('_NOHTF', '')
 
+        # Check current position
+        current_pos = self.open_positions.get(symbol)
+        has_long = current_pos and current_pos.direction == 'LONG' and current_pos.strategy != 'BUYHOLD'
+        has_short = current_pos and current_pos.direction == 'SHORT'
+
         try:
             # Generate signals based on strategy
             if base_strategy == 'SUPERTREND':
@@ -403,10 +441,18 @@ class PortfolioSimulator:
 
                 # Check for signal on last bar
                 if len(direction) >= 2:
+                    # Bullish crossover (direction changes from -1 to 1)
                     if direction[-1] == 1 and direction[-2] == -1:
-                        return {'action': 'BUY', 'strategy': strategy}
+                        if has_short:
+                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
+                        elif not has_long:
+                            return {'action': 'BUY', 'strategy': strategy}
+                    # Bearish crossover (direction changes from 1 to -1)
                     elif direction[-1] == -1 and direction[-2] == 1:
-                        return {'action': 'SELL', 'strategy': strategy}
+                        if has_long:
+                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
+                        elif not has_short:
+                            return {'action': 'SHORT', 'strategy': strategy}
 
             elif base_strategy == 'JMA':
                 fast = params.get('fast', 10)
@@ -419,9 +465,15 @@ class PortfolioSimulator:
                     cross_down = jma_fast[-1] < jma_slow[-1] and jma_fast[-2] >= jma_slow[-2]
 
                     if cross_up:
-                        return {'action': 'BUY', 'strategy': strategy}
+                        if has_short:
+                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
+                        elif not has_long:
+                            return {'action': 'BUY', 'strategy': strategy}
                     elif cross_down:
-                        return {'action': 'SELL', 'strategy': strategy}
+                        if has_long:
+                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
+                        elif not has_short:
+                            return {'action': 'SHORT', 'strategy': strategy}
 
             elif base_strategy == 'KAMA':
                 period = params.get('period', 10)
@@ -434,9 +486,15 @@ class PortfolioSimulator:
                     cross_down = kama[-1] < signal_line[-1] and kama[-2] >= signal_line[-2]
 
                     if cross_up:
-                        return {'action': 'BUY', 'strategy': strategy}
+                        if has_short:
+                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
+                        elif not has_long:
+                            return {'action': 'BUY', 'strategy': strategy}
                     elif cross_down:
-                        return {'action': 'SELL', 'strategy': strategy}
+                        if has_long:
+                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
+                        elif not has_short:
+                            return {'action': 'SHORT', 'strategy': strategy}
 
             elif base_strategy == 'EMA':
                 fast = params.get('fast', 12)
@@ -449,9 +507,15 @@ class PortfolioSimulator:
                     cross_down = ema_fast[-1] < ema_slow[-1] and ema_fast[-2] >= ema_slow[-2]
 
                     if cross_up:
-                        return {'action': 'BUY', 'strategy': strategy}
+                        if has_short:
+                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
+                        elif not has_long:
+                            return {'action': 'BUY', 'strategy': strategy}
                     elif cross_down:
-                        return {'action': 'SELL', 'strategy': strategy}
+                        if has_long:
+                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
+                        elif not has_short:
+                            return {'action': 'SHORT', 'strategy': strategy}
 
             elif base_strategy == 'SMA':
                 fast = params.get('fast', 20)
@@ -464,9 +528,15 @@ class PortfolioSimulator:
                     cross_down = sma_fast[-1] < sma_slow[-1] and sma_fast[-2] >= sma_slow[-2]
 
                     if cross_up:
-                        return {'action': 'BUY', 'strategy': strategy}
+                        if has_short:
+                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
+                        elif not has_long:
+                            return {'action': 'BUY', 'strategy': strategy}
                     elif cross_down:
-                        return {'action': 'SELL', 'strategy': strategy}
+                        if has_long:
+                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
+                        elif not has_short:
+                            return {'action': 'SHORT', 'strategy': strategy}
 
         except Exception as e:
             pass
