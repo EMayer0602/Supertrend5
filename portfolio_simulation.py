@@ -120,7 +120,8 @@ class PortfolioSimulator:
                  bh_positions: int = 10,
                  strategy_positions: int = 20,
                  fee_rate: float = 0.001,  # 0.1% fee
-                 trailing_stop_pct: float = 0.20):
+                 trailing_stop_pct: float = 0.20,
+                 long_only: bool = False):  # NEW: Only trade LONG positions
 
         self.initial_capital = initial_capital
         self.capital = initial_capital
@@ -129,6 +130,7 @@ class PortfolioSimulator:
         self.strategy_positions = strategy_positions
         self.fee_rate = fee_rate
         self.trailing_stop_pct = trailing_stop_pct
+        self.long_only = long_only  # NEW
 
         self.open_positions: Dict[str, Position] = {}  # symbol -> Position
         self.closed_positions: List[Position] = []
@@ -484,9 +486,12 @@ class PortfolioSimulator:
 
             # =================================================================
             # SHORT SIGNALS (using short_params - different optimized values)
+            # Skip if long_only mode is enabled
             # =================================================================
             short_signal = None
-            if short_base == 'SUPERTREND':
+            if self.long_only:
+                pass  # Skip short signal generation in long_only mode
+            elif short_base == 'SUPERTREND':
                 period = short_params.get('period', 7)  # Shorter default for shorts
                 mult = short_params.get('multiplier', 2.0)
                 supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
@@ -1370,15 +1375,24 @@ class PortfolioSimulator:
         '''
 
 
-def run_portfolio_simulation(days_back: int = 180):
-    """Main function to run portfolio simulation"""
+def run_portfolio_simulation(days_back: int = 180, long_only: bool = False):
+    """Main function to run portfolio simulation
+
+    Args:
+        days_back: Number of days to simulate
+        long_only: If True, only trade LONG positions (no shorts)
+    """
+    mode_str = "LONG ONLY" if long_only else "LONG & SHORT"
+    print(f"\nTrading Mode: {mode_str}")
+
     simulator = PortfolioSimulator(
         initial_capital=20000.0,
         max_positions=30,
         bh_positions=10,
         strategy_positions=20,
         fee_rate=0.001,  # 0.1%
-        trailing_stop_pct=0.20  # 20% trailing stop for B&H
+        trailing_stop_pct=0.20,  # 20% trailing stop for B&H
+        long_only=long_only  # NEW
     )
 
     simulator.run_simulation(days_back=days_back, rebalance_freq=5)
@@ -1393,10 +1407,13 @@ if __name__ == "__main__":
     import sys
 
     days = 180
-    if len(sys.argv) > 1:
-        try:
-            days = int(sys.argv[1])
-        except:
-            pass
+    long_only = False
 
-    run_portfolio_simulation(days_back=days)
+    # Parse arguments
+    for arg in sys.argv[1:]:
+        if arg == "--long-only":
+            long_only = True
+        elif arg.isdigit():
+            days = int(arg)
+
+    run_portfolio_simulation(days_back=days, long_only=long_only)
