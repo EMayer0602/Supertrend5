@@ -1632,37 +1632,43 @@ def test_ticker(symbol: str, days_back: int = 365) -> Dict:
             strategy_results['SMA'] = {'return': best_sma_return, 'params': best_sma_params}
 
         # =================================================================
-        # Find best strategy overall
+        # Find best ACTIVE strategy (NEVER assign BUYHOLD - always real strategy)
         # =================================================================
-        best_strategy = 'BUYHOLD'
-        best_return = buy_hold_return
+        best_strategy = None
+        best_return = -np.inf
         best_params = {}
 
+        # Find best among actual trading strategies
         for strat_name, strat_data in strategy_results.items():
             if strat_data['return'] > best_return:
                 best_return = strat_data['return']
                 best_strategy = strat_name
                 best_params = strat_data['params']
 
-        # Check if any strategy beats B&H
-        beats_bh = best_return > buy_hold_return and best_strategy != 'BUYHOLD'
+        # If no strategy worked, default to SUPERTREND
+        if best_strategy is None:
+            best_strategy = 'SUPERTREND'
+            best_return = 0
+            best_params = {'period': 10, 'multiplier': 3.0}
 
-        # Add BUYHOLD to strategy_results for completeness
+        # Check if best strategy beats B&H
+        beats_bh = best_return > buy_hold_return
+
+        # Add BUYHOLD to strategy_results for reference only
         strategy_results['BUYHOLD'] = {'return': buy_hold_return, 'params': {}}
 
         return {
             'symbol': symbol,
             'buy_hold': buy_hold_return,
-            'strategy_return': best_return if best_strategy != 'BUYHOLD' else best_return,
-            'outperformance': best_return - buy_hold_return if beats_bh else 0,
-            'beats_bh': beats_bh,
-            'params': best_params,
             'data_days': len(stock_data),
-            # Assignment - best strategy
+            # Best ACTIVE strategy - ALWAYS a real strategy, NEVER BUYHOLD
             'assigned_strategy': best_strategy,
             'assigned_params': best_params,
             'assigned_return': best_return,
-            # ALL strategies with BEST PARAMS for each
+            # Comparison with B&H
+            'beats_bh': beats_bh,
+            'outperformance': best_return - buy_hold_return,
+            # ALL strategies with BEST PARAMS
             'all_strategies': strategy_results
         }
     except Exception as e:
@@ -2092,7 +2098,8 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
     print("="*80)
 
     assignments = {}
-    strategy_counts = {'SUPERTREND': 0, 'JMA': 0, 'KAMA': 0, 'EMA': 0, 'SMA': 0, 'BUYHOLD': 0}
+    strategy_counts = {'SUPERTREND': 0, 'JMA': 0, 'KAMA': 0, 'EMA': 0, 'SMA': 0}
+    beats_bh_count = 0
     error_count = 0
 
     for i, symbol in enumerate(ALL_TICKERS, 1):
@@ -2108,22 +2115,25 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
 
         assigned = result['assigned_strategy']
         bh_ret = result['buy_hold']
-        strat_ret = result.get('assigned_return', bh_ret)
+        strat_ret = result.get('assigned_return', 0)
         outperf = result.get('outperformance', 0)
+        beats_bh = result.get('beats_bh', False)
 
         strategy_counts[assigned] = strategy_counts.get(assigned, 0) + 1
+        if beats_bh:
+            beats_bh_count += 1
 
-        if assigned != 'BUYHOLD':
-            print(f"{assigned:<10} | Return: {strat_ret:+.1%} vs B&H: {bh_ret:+.1%} (Out: {outperf:+.1%})")
-        else:
-            print(f"BUYHOLD    | B&H: {bh_ret:+.1%}")
+        # Always show the REAL strategy, indicate if it beats B&H
+        marker = "✓" if beats_bh else "✗"
+        print(f"{assigned:<10} | Strat: {strat_ret:+.1%} vs B&H: {bh_ret:+.1%} | {marker}")
 
         assignments[symbol] = {
             'strategy': assigned,
             'params': result.get('assigned_params', {}),
-            'buy_hold_return': bh_ret,
             'strategy_return': strat_ret,
-            'beats_buyhold': result.get('beats_bh', False),
+            'buy_hold_return': bh_ret,
+            'beats_buyhold': beats_bh,
+            'outperformance': outperf,
             'all_strategies': result.get('all_strategies', {})
         }
 
@@ -2131,11 +2141,14 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
     print("\n" + "="*80)
     print("OPTIMIZATION SUMMARY")
     print("="*80)
+    total_valid = len(ALL_TICKERS) - error_count
     print(f"\nTotal tickers: {len(ALL_TICKERS)}")
-    print(f"\n--- STRATEGY ASSIGNMENTS ---")
-    for strat in ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA', 'BUYHOLD']:
+    print(f"Successfully tested: {total_valid}")
+    print(f"Strategies that BEAT B&H: {beats_bh_count} ({100*beats_bh_count/total_valid:.1f}%)")
+    print(f"\n--- STRATEGY ASSIGNMENTS (Best strategy per ticker) ---")
+    for strat in ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA']:
         count = strategy_counts.get(strat, 0)
-        pct = 100 * count / len(ALL_TICKERS) if ALL_TICKERS else 0
+        pct = 100 * count / total_valid if total_valid else 0
         print(f"  {strat:<12}: {count:3d} ({pct:4.1f}%)")
     print(f"  {'ERRORS':<12}: {error_count:3d}")
 
@@ -2147,24 +2160,23 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
             for sym, data in sorted(assigned_syms, key=lambda x: x[1].get('strategy_return', 0), reverse=True):
                 params = data.get('params', {})
                 ret = data.get('strategy_return', 0)
+                bh = data.get('buy_hold_return', 0)
+                beats = "✓" if data.get('beats_buyhold', False) else "✗"
                 param_str = ', '.join(f"{k}={v}" for k, v in params.items()) if params else "default"
-                print(f"  {sym:<6}: Return={ret:+6.1%} | {param_str}")
-
-    buyhold_syms = [(sym, data) for sym, data in assignments.items() if data.get('strategy') == 'BUYHOLD']
-    if buyhold_syms:
-        print(f"\n--- BUYHOLD ASSIGNMENTS ({len(buyhold_syms)}) ---")
-        symbols = [sym for sym, _ in sorted(buyhold_syms, key=lambda x: x[1].get('buy_hold_return', 0), reverse=True)]
-        # Show as comma-separated list
-        print(f"  {', '.join(symbols)}")
+                print(f"  {sym:<6}: Strat={ret:+6.1%} B&H={bh:+6.1%} {beats} | {param_str}")
 
     # Save results
     if save_results:
         output = {
-            '_comment': f"Multi-strategy assignments for {len(ALL_TICKERS)} tickers",
+            '_comment': f"Multi-strategy assignments for {len(ALL_TICKERS)} tickers - BEST strategy per ticker",
             '_optimization_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
             '_days_back': days_back,
-            '_strategies': ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA', 'BUYHOLD'],
-            '_summary': {**strategy_counts, 'errors': error_count},
+            '_strategies': ['SUPERTREND', 'JMA', 'KAMA', 'EMA', 'SMA'],
+            '_summary': {
+                **strategy_counts,
+                'beats_buyhold': beats_bh_count,
+                'errors': error_count
+            },
             'assignments': assignments
         }
 
