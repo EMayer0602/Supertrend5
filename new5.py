@@ -2207,23 +2207,40 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
 # HTF COMPARISON & MULTI-PORTFOLIO SIMULATION
 # =============================================================================
 
-def test_ticker_htf_comparison(symbol: str, days_back: int = 365) -> Dict:
+def test_ticker_htf_comparison(symbol: str, days_back: int = 365, end_offset_days: int = 0) -> Dict:
     """
     Test a single ticker with ALL strategies, comparing WITH and WITHOUT HTF filter.
     Returns best approach for each strategy variant.
+
+    Args:
+        symbol: Stock symbol
+        days_back: Number of days of data to use for testing
+        end_offset_days: Skip the last N days (for walk-forward: optimize on older data)
     """
     config = TradingConfig(
         symbol=symbol,
         initial_capital=10000.0,
-        days_back=days_back,
+        days_back=days_back + end_offset_days,  # Get extra data
         use_htf_filter=False
     )
 
     try:
-        stock_data = download_from_tws(symbol, days_back)
+        # Download more data than needed
+        stock_data = download_from_tws(symbol, days_back + end_offset_days + 50)
 
         if stock_data.empty or len(stock_data) < 100:
             return {'symbol': symbol, 'error': 'No data'}
+
+        # Trim to optimization period (exclude last end_offset_days)
+        if end_offset_days > 0 and len(stock_data) > end_offset_days:
+            stock_data = stock_data.iloc[:-end_offset_days]
+
+        # Take only the last days_back days
+        if len(stock_data) > days_back:
+            stock_data = stock_data.iloc[-days_back:]
+
+        if len(stock_data) < 100:
+            return {'symbol': symbol, 'error': 'Not enough data after filtering'}
 
         close_col = f'Close_{symbol}'
         high_col = f'High_{symbol}'
@@ -2391,10 +2408,15 @@ def test_ticker_htf_comparison(symbol: str, days_back: int = 365) -> Dict:
         return {'symbol': symbol, 'error': str(e)}
 
 
-def run_htf_comparison_and_categorize(days_back: int = 180, min_pnl: float = 0.30):
+def run_htf_comparison_and_categorize(days_back: int = 180, min_pnl: float = 0.30, end_offset_days: int = 0):
     """
     Run comprehensive HTF comparison on all tickers.
     Categorize by strategy with PnL >= min_pnl (default 30%).
+
+    Args:
+        days_back: Number of days for optimization period
+        min_pnl: Minimum PnL threshold for categorization (default 30%)
+        end_offset_days: Skip the last N days (for walk-forward optimization)
 
     Categories:
     - STRATEGY_HTF: Strategy with HTF filter, PnL >= 30%
@@ -2416,8 +2438,10 @@ def run_htf_comparison_and_categorize(days_back: int = 180, min_pnl: float = 0.3
         return obj
 
     print("="*80)
-    print("HTF COMPARISON & CATEGORIZATION")
-    print(f"Period: {days_back} days ({days_back/30:.0f} months)")
+    print("HTF COMPARISON & CATEGORIZATION (WALK-FORWARD)")
+    print(f"Optimization Period: {days_back} days ({days_back/30:.0f} months)")
+    if end_offset_days > 0:
+        print(f"Data ends: {end_offset_days} days ago (for out-of-sample testing)")
     print(f"Minimum PnL threshold: {min_pnl:.0%}")
     print("="*80)
 
@@ -2443,7 +2467,7 @@ def run_htf_comparison_and_categorize(days_back: int = 180, min_pnl: float = 0.3
     for i, symbol in enumerate(ALL_TICKERS, 1):
         print(f"\n[{i}/{len(ALL_TICKERS)}] {symbol}...", end=" ")
 
-        result = test_ticker_htf_comparison(symbol, days_back)
+        result = test_ticker_htf_comparison(symbol, days_back, end_offset_days)
 
         if 'error' in result:
             print(f"ERROR: {result['error']}")
@@ -2513,9 +2537,10 @@ def run_htf_comparison_and_categorize(days_back: int = 180, min_pnl: float = 0.3
 
     # Save categorized results
     output = {
-        '_comment': 'HTF Comparison Results - Categorized by Strategy',
+        '_comment': 'HTF Comparison Results - Categorized by Strategy (Walk-Forward)',
         '_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-        '_days_back': days_back,
+        '_optimization_days': days_back,
+        '_end_offset_days': end_offset_days,
         '_min_pnl': min_pnl,
         '_summary': {cat: len(items) for cat, items in categories.items()},
         'categories': categories,
@@ -2638,16 +2663,23 @@ def run_multi_portfolio_simulation(categories: Dict = None, days_back: int = 180
     return portfolio_results
 
 
-def run_full_htf_analysis(days_back: int = 180, min_pnl: float = 0.30):
+def run_full_htf_analysis(days_back: int = 180, min_pnl: float = 0.30, end_offset_days: int = 0):
     """
     Run full HTF analysis: comparison, categorization, and portfolio simulation.
+
+    Args:
+        days_back: Number of days for optimization period
+        min_pnl: Minimum PnL threshold
+        end_offset_days: Skip last N days for walk-forward analysis
     """
     print("="*80)
     print("FULL HTF ANALYSIS & MULTI-PORTFOLIO SIMULATION")
+    if end_offset_days > 0:
+        print(f"WALK-FORWARD: Optimize {days_back} days, ending {end_offset_days} days ago")
     print("="*80)
 
     # Step 1: Run comparison and categorization
-    categories, all_results = run_htf_comparison_and_categorize(days_back, min_pnl)
+    categories, all_results = run_htf_comparison_and_categorize(days_back, min_pnl, end_offset_days)
 
     # Step 2: Run multi-portfolio simulation
     portfolio_results = run_multi_portfolio_simulation(categories, days_back)
@@ -2656,6 +2688,42 @@ def run_full_htf_analysis(days_back: int = 180, min_pnl: float = 0.30):
     disconnect_ib()
 
     return categories, portfolio_results
+
+
+def run_walk_forward_analysis(optimize_days: int = 270, test_days: int = 90, min_pnl: float = 0.30):
+    """
+    Walk-Forward Analysis:
+    - Optimize strategies on historical data (optimize_days, ending test_days ago)
+    - Then run portfolio simulation on the test period (last test_days)
+
+    Args:
+        optimize_days: Days for optimization (default: 9 months = 270 days)
+        test_days: Days for out-of-sample testing (default: 3 months = 90 days)
+        min_pnl: Minimum PnL threshold for categorization
+    """
+    print("="*80)
+    print("WALK-FORWARD ANALYSIS")
+    print("="*80)
+    print(f"Optimization Period: {optimize_days} days ({optimize_days/30:.0f} months)")
+    print(f"Test Period: {test_days} days ({test_days/30:.0f} months)")
+    print(f"Min PnL Threshold: {min_pnl:.0%}")
+    print("="*80)
+
+    # Step 1: Optimize on historical data (ending test_days ago)
+    print("\n>>> STEP 1: OPTIMIZATION (Historical Data)")
+    categories, all_results = run_htf_comparison_and_categorize(
+        days_back=optimize_days,
+        min_pnl=min_pnl,
+        end_offset_days=test_days
+    )
+
+    print("\n>>> STEP 2: OUT-OF-SAMPLE SIMULATION (Last {} days)".format(test_days))
+    print("Run: python portfolio_simulation.py {}".format(test_days))
+
+    # Disconnect
+    disconnect_ib()
+
+    return categories, all_results
 
 
 if __name__ == "__main__":
@@ -2683,6 +2751,9 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "--htf-full":
         # Full analysis: compare + categorize + portfolio simulation
         run_full_htf_analysis(days_back=180, min_pnl=0.30)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--walk-forward":
+        # Walk-forward analysis: 9 months optimization, 3 months test
+        run_walk_forward_analysis(optimize_days=270, test_days=90, min_pnl=0.30)
     else:
         main()
         disconnect_ib()
