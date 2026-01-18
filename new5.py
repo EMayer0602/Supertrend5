@@ -1480,13 +1480,59 @@ def main():
 
 def test_strategy_return(stock_data: pd.DataFrame, buy_signals: np.ndarray, sell_signals: np.ndarray,
                          config: TradingConfig, system) -> float:
-    """Helper: calculate return for a given signal set"""
+    """Helper: calculate return for a given LONG signal set"""
     try:
         long_trades, _ = system.generate_trades(stock_data, buy_signals, sell_signals, long_only=True)
         if len(long_trades) < 2:
             return -np.inf
         _, _, combined_eq, _ = system.calculate_equity_curve_vectorized(stock_data, long_trades, [])
         return (combined_eq[-1] - config.initial_capital) / config.initial_capital
+    except:
+        return -np.inf
+
+
+def test_short_strategy_return(stock_data: pd.DataFrame, short_signals: np.ndarray, cover_signals: np.ndarray,
+                                config: TradingConfig, system) -> float:
+    """Helper: calculate return for a given SHORT signal set (inverted logic)"""
+    try:
+        # For shorts: entry on short_signals, exit on cover_signals
+        # We simulate this by treating it as "long" trades but with inverted P&L
+        symbol = config.symbol
+        close_col = f'Close_{symbol}'
+        close = stock_data[close_col].values
+
+        # Find short entry/exit points
+        short_entries = np.where(short_signals)[0]
+        cover_exits = np.where(cover_signals)[0]
+
+        if len(short_entries) < 1:
+            return -np.inf
+
+        total_return = 0.0
+        num_trades = 0
+
+        for entry_idx in short_entries:
+            # Find next cover signal after this entry
+            exit_candidates = cover_exits[cover_exits > entry_idx]
+            if len(exit_candidates) == 0:
+                # Use last bar as exit
+                exit_idx = len(close) - 1
+            else:
+                exit_idx = exit_candidates[0]
+
+            # Short P&L: entry_price - exit_price (profit when price falls)
+            entry_price = close[entry_idx]
+            exit_price = close[exit_idx]
+
+            if entry_price > 0:
+                trade_return = (entry_price - exit_price) / entry_price
+                total_return += trade_return
+                num_trades += 1
+
+        if num_trades < 2:
+            return -np.inf
+
+        return total_return / num_trades * num_trades  # Approximate cumulative return
     except:
         return -np.inf
 
@@ -2408,6 +2454,405 @@ def test_ticker_htf_comparison(symbol: str, days_back: int = 365, end_offset_day
         return {'symbol': symbol, 'error': str(e)}
 
 
+def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offset_days: int = 0) -> Dict:
+    """
+    Test a single ticker with SEPARATE optimization for LONG and SHORT strategies.
+    Different parameter ranges for each direction.
+
+    Returns:
+        - best_long: Best LONG strategy with params
+        - best_short: Best SHORT strategy with params
+    """
+    config = TradingConfig(
+        symbol=symbol,
+        initial_capital=10000.0,
+        days_back=days_back + end_offset_days,
+        use_htf_filter=False
+    )
+
+    try:
+        stock_data = download_from_tws(symbol, days_back + end_offset_days + 50)
+
+        if stock_data.empty or len(stock_data) < 100:
+            return {'symbol': symbol, 'error': 'No data'}
+
+        if end_offset_days > 0 and len(stock_data) > end_offset_days:
+            stock_data = stock_data.iloc[:-end_offset_days]
+
+        if len(stock_data) > days_back:
+            stock_data = stock_data.iloc[-days_back:]
+
+        if len(stock_data) < 100:
+            return {'symbol': symbol, 'error': 'Not enough data'}
+
+        close_col = f'Close_{symbol}'
+        high_col = f'High_{symbol}'
+        low_col = f'Low_{symbol}'
+
+        high = stock_data[high_col].values
+        low = stock_data[low_col].values
+        close = stock_data[close_col].values
+        close_series = stock_data[close_col]
+
+        buy_hold_return = (close[-1] - close[0]) / close[0]
+        short_hold_return = -buy_hold_return  # Inverse of B&H
+
+        system = OptimizedTradingSystem(config)
+
+        # HTF direction
+        htf_direction = None
+        htf_direction_bearish = None  # Inverted for shorts
+        try:
+            htf_series = get_htf_trend(stock_data, symbol, 10, 3.0)
+            htf_direction = htf_series.values
+            htf_direction_bearish = -htf_direction  # Invert: -1 becomes bullish for shorts
+        except:
+            pass
+
+        long_results = {}
+        short_results = {}
+
+        # =================================================================
+        # LONG STRATEGIES (Buy on bullish, Sell on bearish)
+        # =================================================================
+
+        # SUPERTREND LONG
+        for use_htf in [False, True]:
+            htf_label = "_HTF" if use_htf else ""
+            best_return = -np.inf
+            best_params = None
+            for period in [10, 14, 20]:
+                for mult in [2.0, 3.0, 4.0]:
+                    try:
+                        supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
+                        htf_dir = htf_direction if use_htf else None
+                        buy_signals, sell_signals = generate_signals_vectorized(
+                            close, supertrend, direction, htf_dir, use_htf, "trend_following"
+                        )
+                        ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                        if ret > best_return:
+                            best_return = ret
+                            best_params = {'period': period, 'multiplier': mult}
+                    except:
+                        pass
+            if best_return > -np.inf:
+                long_results[f'SUPERTREND{htf_label}'] = {'return': float(best_return), 'params': best_params}
+
+        # JMA/KAMA/EMA/SMA LONG
+        for ma_name, calc_func, param_ranges in [
+            ('JMA', calculate_jma, {'fast': [7, 10, 14], 'slow': [21, 30, 50]}),
+            ('KAMA', lambda s, p: calculate_kama(s, p), {'period': [10, 14, 20], 'signal': [10, 14, 21]}),
+            ('EMA', calculate_ema, {'fast': [8, 12, 20], 'slow': [21, 26, 50]}),
+            ('SMA', calculate_sma, {'fast': [10, 20, 30], 'slow': [50, 100, 200]}),
+        ]:
+            for use_htf in [False, True]:
+                htf_label = "_HTF" if use_htf else ""
+                best_return = -np.inf
+                best_params = None
+
+                if 'fast' in param_ranges:
+                    for fast in param_ranges['fast']:
+                        for slow in param_ranges['slow']:
+                            if fast >= slow:
+                                continue
+                            try:
+                                ma_fast = calc_func(close_series, fast).values
+                                ma_slow = calc_func(close_series, slow).values
+                                buy_signals, sell_signals = get_ma_crossover_signals(close, ma_fast, ma_slow)
+                                if use_htf and htf_direction is not None:
+                                    buy_signals = buy_signals & (htf_direction == 1)
+                                ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                                if ret > best_return:
+                                    best_return = ret
+                                    best_params = {'fast': fast, 'slow': slow}
+                            except:
+                                pass
+                else:  # KAMA style
+                    for period in param_ranges['period']:
+                        for signal in param_ranges['signal']:
+                            try:
+                                kama = calculate_kama(close_series, period).values
+                                signal_line = calculate_sma(close_series, signal).values
+                                buy_signals, sell_signals = get_ma_crossover_signals(close, kama, signal_line)
+                                if use_htf and htf_direction is not None:
+                                    buy_signals = buy_signals & (htf_direction == 1)
+                                ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                                if ret > best_return:
+                                    best_return = ret
+                                    best_params = {'period': period, 'signal': signal}
+                            except:
+                                pass
+
+                if best_return > -np.inf:
+                    long_results[f'{ma_name}{htf_label}'] = {'return': float(best_return), 'params': best_params}
+
+        # =================================================================
+        # SHORT STRATEGIES (Short on bearish, Cover on bullish)
+        # Different parameters: shorter periods, tighter multipliers
+        # =================================================================
+
+        # SUPERTREND SHORT (different params: shorter periods work better for shorts)
+        for use_htf in [False, True]:
+            htf_label = "_HTF" if use_htf else ""
+            best_return = -np.inf
+            best_params = None
+            # Shorter periods and lower multipliers for shorts
+            for period in [7, 10, 14]:
+                for mult in [1.5, 2.0, 2.5, 3.0]:
+                    try:
+                        supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
+                        # For shorts: entry on bearish (direction -1), exit on bullish (direction 1)
+                        # Invert signals for short trading
+                        prev_dir = np.roll(direction, 1)
+                        prev_dir[0] = 0
+                        short_signals = (prev_dir == 1) & (direction == -1)  # Bearish crossover
+                        cover_signals = (prev_dir == -1) & (direction == 1)  # Bullish crossover
+
+                        # Apply HTF filter for shorts (only short when HTF bearish)
+                        if use_htf and htf_direction is not None:
+                            short_signals = short_signals & (htf_direction == -1)
+
+                        ret = test_short_strategy_return(stock_data, short_signals, cover_signals, config, system)
+                        if ret > best_return:
+                            best_return = ret
+                            best_params = {'period': period, 'multiplier': mult}
+                    except:
+                        pass
+            if best_return > -np.inf:
+                short_results[f'SUPERTREND{htf_label}'] = {'return': float(best_return), 'params': best_params}
+
+        # MA SHORTS (shorter periods for faster reaction)
+        for ma_name, calc_func, param_ranges in [
+            ('JMA', calculate_jma, {'fast': [5, 7, 10], 'slow': [14, 21, 30]}),
+            ('KAMA', lambda s, p: calculate_kama(s, p), {'period': [7, 10, 14], 'signal': [7, 10, 14]}),
+            ('EMA', calculate_ema, {'fast': [5, 8, 12], 'slow': [13, 21, 26]}),
+            ('SMA', calculate_sma, {'fast': [5, 10, 20], 'slow': [20, 30, 50]}),
+        ]:
+            for use_htf in [False, True]:
+                htf_label = "_HTF" if use_htf else ""
+                best_return = -np.inf
+                best_params = None
+
+                if 'fast' in param_ranges:
+                    for fast in param_ranges['fast']:
+                        for slow in param_ranges['slow']:
+                            if fast >= slow:
+                                continue
+                            try:
+                                ma_fast = calc_func(close_series, fast).values
+                                ma_slow = calc_func(close_series, slow).values
+                                # Invert: short on cross down, cover on cross up
+                                buy_signals, sell_signals = get_ma_crossover_signals(close, ma_fast, ma_slow)
+                                short_signals = sell_signals  # Cross down = short entry
+                                cover_signals = buy_signals   # Cross up = cover
+                                if use_htf and htf_direction is not None:
+                                    short_signals = short_signals & (htf_direction == -1)
+                                ret = test_short_strategy_return(stock_data, short_signals, cover_signals, config, system)
+                                if ret > best_return:
+                                    best_return = ret
+                                    best_params = {'fast': fast, 'slow': slow}
+                            except:
+                                pass
+                else:  # KAMA style
+                    for period in param_ranges['period']:
+                        for signal in param_ranges['signal']:
+                            try:
+                                kama = calculate_kama(close_series, period).values
+                                signal_line = calculate_sma(close_series, signal).values
+                                buy_signals, sell_signals = get_ma_crossover_signals(close, kama, signal_line)
+                                short_signals = sell_signals
+                                cover_signals = buy_signals
+                                if use_htf and htf_direction is not None:
+                                    short_signals = short_signals & (htf_direction == -1)
+                                ret = test_short_strategy_return(stock_data, short_signals, cover_signals, config, system)
+                                if ret > best_return:
+                                    best_return = ret
+                                    best_params = {'period': period, 'signal': signal}
+                            except:
+                                pass
+
+                if best_return > -np.inf:
+                    short_results[f'{ma_name}{htf_label}'] = {'return': float(best_return), 'params': best_params}
+
+        # Find best LONG strategy
+        best_long = None
+        best_long_return = -np.inf
+        for strat, data in long_results.items():
+            if data['return'] > best_long_return:
+                best_long_return = data['return']
+                best_long = strat
+
+        # Find best SHORT strategy
+        best_short = None
+        best_short_return = -np.inf
+        for strat, data in short_results.items():
+            if data['return'] > best_short_return:
+                best_short_return = data['return']
+                best_short = strat
+
+        return {
+            'symbol': symbol,
+            'buy_hold': float(buy_hold_return),
+            'short_hold': float(short_hold_return),
+            # LONG results
+            'best_long': best_long,
+            'best_long_return': float(best_long_return) if best_long else 0,
+            'best_long_params': long_results.get(best_long, {}).get('params', {}) if best_long else {},
+            'all_long': long_results,
+            # SHORT results
+            'best_short': best_short,
+            'best_short_return': float(best_short_return) if best_short else 0,
+            'best_short_params': short_results.get(best_short, {}).get('params', {}) if best_short else {},
+            'all_short': short_results,
+        }
+
+    except Exception as e:
+        return {'symbol': symbol, 'error': str(e)}
+
+
+def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, end_offset_days: int = 90):
+    """
+    Run separate LONG and SHORT optimization and categorization.
+
+    Categories:
+    - LONG: STRATEGY_LONG_HTF, STRATEGY_LONG_NOHTF
+    - SHORT: STRATEGY_SHORT_HTF, STRATEGY_SHORT_NOHTF
+    - UNDERPERFORM_LONG, UNDERPERFORM_SHORT
+    """
+    import json
+
+    def sanitize_for_json(obj):
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_for_json(item) for item in obj]
+        elif isinstance(obj, (np.bool_, np.generic)):
+            return obj.item()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return obj
+
+    print("="*80)
+    print("LONG/SHORT SEPARATE OPTIMIZATION & CATEGORIZATION")
+    print(f"Optimization: {days_back} days, ending {end_offset_days} days ago")
+    print(f"Min PnL: LONG >= {min_pnl:.0%}, SHORT >= {min_pnl:.0%}")
+    print("="*80)
+
+    # Separate categories for LONG and SHORT
+    long_categories = {
+        'SUPERTREND_LONG_HTF': [], 'SUPERTREND_LONG_NOHTF': [],
+        'JMA_LONG_HTF': [], 'JMA_LONG_NOHTF': [],
+        'KAMA_LONG_HTF': [], 'KAMA_LONG_NOHTF': [],
+        'EMA_LONG_HTF': [], 'EMA_LONG_NOHTF': [],
+        'SMA_LONG_HTF': [], 'SMA_LONG_NOHTF': [],
+        'BUYHOLD': [], 'UNDERPERFORM_LONG': []
+    }
+
+    short_categories = {
+        'SUPERTREND_SHORT_HTF': [], 'SUPERTREND_SHORT_NOHTF': [],
+        'JMA_SHORT_HTF': [], 'JMA_SHORT_NOHTF': [],
+        'KAMA_SHORT_HTF': [], 'KAMA_SHORT_NOHTF': [],
+        'EMA_SHORT_HTF': [], 'EMA_SHORT_NOHTF': [],
+        'SMA_SHORT_HTF': [], 'SMA_SHORT_NOHTF': [],
+        'SHORTHOLD': [], 'UNDERPERFORM_SHORT': []
+    }
+
+    all_results = {}
+    error_count = 0
+
+    for i, symbol in enumerate(ALL_TICKERS, 1):
+        print(f"\n[{i}/{len(ALL_TICKERS)}] {symbol}...", end=" ")
+
+        result = test_ticker_long_short_separate(symbol, days_back, end_offset_days)
+
+        if 'error' in result:
+            print(f"ERROR: {result['error']}")
+            error_count += 1
+            continue
+
+        all_results[symbol] = result
+
+        # Categorize LONG
+        best_long = result.get('best_long')
+        long_ret = result.get('best_long_return', 0)
+        long_params = result.get('best_long_params', {})
+        bh_ret = result.get('buy_hold', 0)
+
+        if best_long and long_ret >= min_pnl:
+            base = best_long.replace('_HTF', '')
+            has_htf = '_HTF' in best_long
+            cat_key = f"{base}_LONG_{'HTF' if has_htf else 'NOHTF'}"
+            if cat_key in long_categories:
+                long_categories[cat_key].append({
+                    'symbol': symbol, 'return': long_ret, 'params': long_params, 'buy_hold': bh_ret
+                })
+        elif bh_ret >= min_pnl:
+            long_categories['BUYHOLD'].append({'symbol': symbol, 'return': bh_ret, 'params': {}})
+        else:
+            long_categories['UNDERPERFORM_LONG'].append({
+                'symbol': symbol, 'return': long_ret, 'best_strategy': best_long
+            })
+
+        # Categorize SHORT
+        best_short = result.get('best_short')
+        short_ret = result.get('best_short_return', 0)
+        short_params = result.get('best_short_params', {})
+
+        if best_short and short_ret >= min_pnl:
+            base = best_short.replace('_HTF', '')
+            has_htf = '_HTF' in best_short
+            cat_key = f"{base}_SHORT_{'HTF' if has_htf else 'NOHTF'}"
+            if cat_key in short_categories:
+                short_categories[cat_key].append({
+                    'symbol': symbol, 'return': short_ret, 'params': short_params
+                })
+        else:
+            short_categories['UNDERPERFORM_SHORT'].append({
+                'symbol': symbol, 'return': short_ret, 'best_strategy': best_short
+            })
+
+        long_marker = "✓" if long_ret >= min_pnl else "✗"
+        short_marker = "✓" if short_ret >= min_pnl else "✗"
+        print(f"LONG: {best_long or 'N/A':<12} {long_ret:+.1%} {long_marker} | SHORT: {best_short or 'N/A':<12} {short_ret:+.1%} {short_marker}")
+
+    # Summary
+    print("\n" + "="*80)
+    print("CATEGORIZATION SUMMARY")
+    print("="*80)
+
+    print("\n--- LONG STRATEGIES ---")
+    for cat, items in long_categories.items():
+        if items and 'UNDERPERFORM' not in cat:
+            avg = np.mean([x['return'] for x in items])
+            print(f"{cat}: {len(items)} symbols (avg: {avg:+.1%})")
+
+    print("\n--- SHORT STRATEGIES ---")
+    for cat, items in short_categories.items():
+        if items and 'UNDERPERFORM' not in cat:
+            avg = np.mean([x['return'] for x in items])
+            print(f"{cat}: {len(items)} symbols (avg: {avg:+.1%})")
+
+    # Save results
+    output = {
+        '_comment': 'Separate LONG/SHORT Optimization Results',
+        '_date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+        '_optimization_days': days_back,
+        '_end_offset_days': end_offset_days,
+        '_min_pnl': min_pnl,
+        'long_categories': long_categories,
+        'short_categories': short_categories,
+        'all_results': all_results
+    }
+
+    with open('long_short_categorized.json', 'w') as f:
+        json.dump(sanitize_for_json(output), f, indent=4)
+    print(f"\nResults saved to: long_short_categorized.json")
+
+    disconnect_ib()
+
+    return long_categories, short_categories, all_results
+
+
 def run_htf_comparison_and_categorize(days_back: int = 180, min_pnl: float = 0.30, end_offset_days: int = 0):
     """
     Run comprehensive HTF comparison on all tickers.
@@ -2754,6 +3199,10 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "--walk-forward":
         # Walk-forward analysis: 9 months optimization, 3 months test
         run_walk_forward_analysis(optimize_days=270, test_days=90, min_pnl=0.30)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--long-short":
+        # Separate LONG/SHORT optimization (9 months, test on last 3 months)
+        # Lower threshold for shorts (15%) since they are harder
+        run_long_short_categorization(days_back=270, min_pnl=0.15, end_offset_days=90)
     else:
         main()
         disconnect_ib()

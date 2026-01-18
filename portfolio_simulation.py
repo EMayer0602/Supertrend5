@@ -420,12 +420,15 @@ class PortfolioSimulator:
         low = df_slice[low_col].values
         close_series = df_slice[close_col]
 
-        # Get strategy assignment
-        assignment = self.strategy_assignments.get(symbol, {})
-        strategy = assignment.get('strategy', 'SUPERTREND')
-        params = assignment.get('params', {})
-        use_htf = '_HTF' in strategy
-        base_strategy = strategy.replace('_HTF', '').replace('_NOHTF', '')
+        # Get SEPARATE assignments for LONG and SHORT (different optimized parameters)
+        long_assign = getattr(self, 'long_assignments', {}).get(symbol, {})
+        short_assign = getattr(self, 'short_assignments', {}).get(symbol, {})
+
+        # Fallback to legacy
+        if not long_assign:
+            long_assign = self.strategy_assignments.get(symbol, {})
+        if not short_assign:
+            short_assign = self.strategy_assignments.get(symbol, {})
 
         # Check current position
         current_pos = self.open_positions.get(symbol)
@@ -433,115 +436,114 @@ class PortfolioSimulator:
         has_short = current_pos and current_pos.direction == 'SHORT'
 
         try:
-            # Generate signals based on strategy
-            if base_strategy == 'SUPERTREND':
-                period = params.get('period', 10)
-                mult = params.get('multiplier', 3.0)
+            # Get parameters for each direction
+            long_strategy = long_assign.get('strategy', 'SUPERTREND')
+            long_params = long_assign.get('params', {})
+            long_base = long_strategy.replace('_HTF', '').replace('_NOHTF', '')
+
+            short_strategy = short_assign.get('strategy', 'SUPERTREND')
+            short_params = short_assign.get('params', {})
+            short_base = short_strategy.replace('_HTF', '').replace('_NOHTF', '')
+
+            # =================================================================
+            # LONG SIGNALS (using long_params)
+            # =================================================================
+            long_signal = None
+            if long_base == 'SUPERTREND':
+                period = long_params.get('period', 10)
+                mult = long_params.get('multiplier', 3.0)
                 supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
-
-                # Check for signal on last bar
                 if len(direction) >= 2:
-                    # Bullish crossover (direction changes from -1 to 1)
                     if direction[-1] == 1 and direction[-2] == -1:
-                        if has_short:
-                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
-                        elif not has_long:
-                            return {'action': 'BUY', 'strategy': strategy}
-                    # Bearish crossover (direction changes from 1 to -1)
+                        long_signal = 'BUY'
                     elif direction[-1] == -1 and direction[-2] == 1:
-                        if has_long:
-                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
-                        elif not has_short:
-                            return {'action': 'SHORT', 'strategy': strategy}
+                        long_signal = 'SELL'
+            elif long_base in ['JMA', 'KAMA', 'EMA', 'SMA']:
+                fast = long_params.get('fast', 10)
+                slow = long_params.get('slow', 30)
+                if long_base == 'JMA':
+                    ma_fast = calculate_jma(close_series, fast).values
+                    ma_slow = calculate_jma(close_series, slow).values
+                elif long_base == 'KAMA':
+                    period = long_params.get('period', 10)
+                    signal = long_params.get('signal', 14)
+                    ma_fast = calculate_kama(close_series, period).values
+                    ma_slow = calculate_sma(close_series, signal).values
+                elif long_base == 'EMA':
+                    ma_fast = calculate_ema(close_series, fast).values
+                    ma_slow = calculate_ema(close_series, slow).values
+                else:  # SMA
+                    ma_fast = calculate_sma(close_series, fast).values
+                    ma_slow = calculate_sma(close_series, slow).values
 
-            elif base_strategy == 'JMA':
-                fast = params.get('fast', 10)
-                slow = params.get('slow', 30)
-                jma_fast = calculate_jma(close_series, fast).values
-                jma_slow = calculate_jma(close_series, slow).values
+                if len(ma_fast) >= 2 and len(ma_slow) >= 2:
+                    if ma_fast[-1] > ma_slow[-1] and ma_fast[-2] <= ma_slow[-2]:
+                        long_signal = 'BUY'
+                    elif ma_fast[-1] < ma_slow[-1] and ma_fast[-2] >= ma_slow[-2]:
+                        long_signal = 'SELL'
 
-                if len(jma_fast) >= 2 and len(jma_slow) >= 2:
-                    cross_up = jma_fast[-1] > jma_slow[-1] and jma_fast[-2] <= jma_slow[-2]
-                    cross_down = jma_fast[-1] < jma_slow[-1] and jma_fast[-2] >= jma_slow[-2]
+            # =================================================================
+            # SHORT SIGNALS (using short_params - different optimized values)
+            # =================================================================
+            short_signal = None
+            if short_base == 'SUPERTREND':
+                period = short_params.get('period', 7)  # Shorter default for shorts
+                mult = short_params.get('multiplier', 2.0)
+                supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
+                if len(direction) >= 2:
+                    if direction[-1] == -1 and direction[-2] == 1:
+                        short_signal = 'SHORT'
+                    elif direction[-1] == 1 and direction[-2] == -1:
+                        short_signal = 'COVER'
+            elif short_base in ['JMA', 'KAMA', 'EMA', 'SMA']:
+                fast = short_params.get('fast', 5)  # Shorter for shorts
+                slow = short_params.get('slow', 20)
+                if short_base == 'JMA':
+                    ma_fast = calculate_jma(close_series, fast).values
+                    ma_slow = calculate_jma(close_series, slow).values
+                elif short_base == 'KAMA':
+                    period = short_params.get('period', 7)
+                    signal = short_params.get('signal', 10)
+                    ma_fast = calculate_kama(close_series, period).values
+                    ma_slow = calculate_sma(close_series, signal).values
+                elif short_base == 'EMA':
+                    ma_fast = calculate_ema(close_series, fast).values
+                    ma_slow = calculate_ema(close_series, slow).values
+                else:  # SMA
+                    ma_fast = calculate_sma(close_series, fast).values
+                    ma_slow = calculate_sma(close_series, slow).values
 
-                    if cross_up:
-                        if has_short:
-                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
-                        elif not has_long:
-                            return {'action': 'BUY', 'strategy': strategy}
-                    elif cross_down:
-                        if has_long:
-                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
-                        elif not has_short:
-                            return {'action': 'SHORT', 'strategy': strategy}
+                if len(ma_fast) >= 2 and len(ma_slow) >= 2:
+                    if ma_fast[-1] < ma_slow[-1] and ma_fast[-2] >= ma_slow[-2]:
+                        short_signal = 'SHORT'
+                    elif ma_fast[-1] > ma_slow[-1] and ma_fast[-2] <= ma_slow[-2]:
+                        short_signal = 'COVER'
 
-            elif base_strategy == 'KAMA':
-                period = params.get('period', 10)
-                signal = params.get('signal', 14)
-                kama = calculate_kama(close_series, period).values
-                signal_line = calculate_sma(close_series, signal).values
+            # =================================================================
+            # Combine signals with position awareness
+            # =================================================================
 
-                if len(kama) >= 2 and len(signal_line) >= 2:
-                    cross_up = kama[-1] > signal_line[-1] and kama[-2] <= signal_line[-2]
-                    cross_down = kama[-1] < signal_line[-1] and kama[-2] >= signal_line[-2]
+            # Priority: Close existing positions first
+            if has_short and short_signal == 'COVER':
+                return {'action': 'COVER', 'strategy': short_strategy, 'next_action': 'BUY' if long_signal == 'BUY' else None}
 
-                    if cross_up:
-                        if has_short:
-                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
-                        elif not has_long:
-                            return {'action': 'BUY', 'strategy': strategy}
-                    elif cross_down:
-                        if has_long:
-                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
-                        elif not has_short:
-                            return {'action': 'SHORT', 'strategy': strategy}
+            if has_long and long_signal == 'SELL':
+                return {'action': 'SELL', 'strategy': long_strategy, 'next_action': 'SHORT' if short_signal == 'SHORT' else None}
 
-            elif base_strategy == 'EMA':
-                fast = params.get('fast', 12)
-                slow = params.get('slow', 26)
-                ema_fast = calculate_ema(close_series, fast).values
-                ema_slow = calculate_ema(close_series, slow).values
+            # Open new positions
+            if not has_long and not has_short:
+                if long_signal == 'BUY':
+                    return {'action': 'BUY', 'strategy': long_strategy}
+                elif short_signal == 'SHORT':
+                    return {'action': 'SHORT', 'strategy': short_strategy}
 
-                if len(ema_fast) >= 2 and len(ema_slow) >= 2:
-                    cross_up = ema_fast[-1] > ema_slow[-1] and ema_fast[-2] <= ema_slow[-2]
-                    cross_down = ema_fast[-1] < ema_slow[-1] and ema_fast[-2] >= ema_slow[-2]
-
-                    if cross_up:
-                        if has_short:
-                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
-                        elif not has_long:
-                            return {'action': 'BUY', 'strategy': strategy}
-                    elif cross_down:
-                        if has_long:
-                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
-                        elif not has_short:
-                            return {'action': 'SHORT', 'strategy': strategy}
-
-            elif base_strategy == 'SMA':
-                fast = params.get('fast', 20)
-                slow = params.get('slow', 50)
-                sma_fast = calculate_sma(close_series, fast).values
-                sma_slow = calculate_sma(close_series, slow).values
-
-                if len(sma_fast) >= 2 and len(sma_slow) >= 2:
-                    cross_up = sma_fast[-1] > sma_slow[-1] and sma_fast[-2] <= sma_slow[-2]
-                    cross_down = sma_fast[-1] < sma_slow[-1] and sma_fast[-2] >= sma_slow[-2]
-
-                    if cross_up:
-                        if has_short:
-                            return {'action': 'COVER', 'strategy': strategy, 'next_action': 'BUY'}
-                        elif not has_long:
-                            return {'action': 'BUY', 'strategy': strategy}
-                    elif cross_down:
-                        if has_long:
-                            return {'action': 'SELL', 'strategy': strategy, 'next_action': 'SHORT'}
-                        elif not has_short:
-                            return {'action': 'SHORT', 'strategy': strategy}
+            return None
 
         except Exception as e:
             pass
 
         return None
+
 
     def run_simulation(self, days_back: int = 180, rebalance_freq: int = 5):
         """
@@ -558,26 +560,75 @@ class PortfolioSimulator:
         print(f"Period: {days_back} days")
         print("="*80)
 
-        # Load strategy assignments
-        try:
-            with open('htf_categorized_results.json', 'r') as f:
-                data = json.load(f)
-                categories = data.get('categories', {})
+        # Load strategy assignments (try long_short_categorized first, fallback to htf_categorized)
+        self.long_assignments = {}
+        self.short_assignments = {}
 
-                # Build assignment dict
-                for cat_name, items in categories.items():
-                    if cat_name in ['UNDERPERFORM', 'BUYHOLD']:
+        try:
+            # Try separate LONG/SHORT categorization first
+            with open('long_short_categorized.json', 'r') as f:
+                data = json.load(f)
+
+                # Load LONG assignments
+                long_cats = data.get('long_categories', {})
+                for cat_name, items in long_cats.items():
+                    if 'UNDERPERFORM' in cat_name or cat_name == 'BUYHOLD':
                         continue
                     for item in items:
                         symbol = item['symbol']
-                        self.strategy_assignments[symbol] = {
-                            'strategy': cat_name,
+                        # Extract base strategy name
+                        base = cat_name.replace('_LONG_HTF', '').replace('_LONG_NOHTF', '')
+                        has_htf = '_HTF' in cat_name
+                        self.long_assignments[symbol] = {
+                            'strategy': f"{base}{'_HTF' if has_htf else ''}",
                             'params': item.get('params', {}),
                             'return': item.get('return', 0)
                         }
-                print(f"Loaded {len(self.strategy_assignments)} strategy assignments")
-        except Exception as e:
-            print(f"Warning: Could not load strategy assignments: {e}")
+
+                # Load SHORT assignments
+                short_cats = data.get('short_categories', {})
+                for cat_name, items in short_cats.items():
+                    if 'UNDERPERFORM' in cat_name or cat_name == 'SHORTHOLD':
+                        continue
+                    for item in items:
+                        symbol = item['symbol']
+                        base = cat_name.replace('_SHORT_HTF', '').replace('_SHORT_NOHTF', '')
+                        has_htf = '_HTF' in cat_name
+                        self.short_assignments[symbol] = {
+                            'strategy': f"{base}{'_HTF' if has_htf else ''}",
+                            'params': item.get('params', {}),
+                            'return': item.get('return', 0)
+                        }
+
+                print(f"Loaded LONG: {len(self.long_assignments)}, SHORT: {len(self.short_assignments)} assignments")
+
+                # Also populate legacy strategy_assignments for compatibility
+                self.strategy_assignments = self.long_assignments.copy()
+
+        except FileNotFoundError:
+            # Fallback to old format
+            try:
+                with open('htf_categorized_results.json', 'r') as f:
+                    data = json.load(f)
+                    categories = data.get('categories', {})
+
+                    for cat_name, items in categories.items():
+                        if cat_name in ['UNDERPERFORM', 'BUYHOLD']:
+                            continue
+                        for item in items:
+                            symbol = item['symbol']
+                            self.strategy_assignments[symbol] = {
+                                'strategy': cat_name,
+                                'params': item.get('params', {}),
+                                'return': item.get('return', 0)
+                            }
+                            # Use same params for both directions (fallback)
+                            self.long_assignments[symbol] = self.strategy_assignments[symbol]
+                            self.short_assignments[symbol] = self.strategy_assignments[symbol]
+
+                    print(f"Loaded {len(self.strategy_assignments)} strategy assignments (legacy format)")
+            except Exception as e:
+                print(f"Warning: Could not load strategy assignments: {e}")
 
         # Load price data
         self.load_price_data(ALL_TICKERS, days_back + 50)
