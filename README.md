@@ -11,6 +11,7 @@ A comprehensive trading system with strategy optimization, backtesting, and port
 - **Portfolio Simulation**: 30 positions (10 B&H + 20 Strategy)
 - **Long & Short Trading**: Full directional trading support
 - **Long-Only Mode**: Option to disable short trading
+- **Live Paper Trading**: IB Paper Trader with real-time dashboard
 - **HTML Reports**: Interactive charts and trade lists
 
 ## Requirements
@@ -169,11 +170,70 @@ Higher Time Frame filter uses weekly Supertrend to filter daily signals:
 - LONG: Only buy when weekly trend is bullish
 - SHORT: Only short when weekly trend is bearish
 
+## IB Paper Trader (Live Trading)
+
+Real-time paper trading with Interactive Brokers TWS.
+
+### CLI Options (ib_paper_trader.py)
+
+```bash
+python ib_paper_trader.py [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Override market hours check |
+| `--dashboard` | Generate dashboard only (no IB connection) |
+| `--sync` | Sync positions with IB and generate dashboard |
+| `--long-only` | Only trade LONG positions |
+| `--port PORT` | TWS port (default: 7497) |
+
+### Features
+
+- **Live Position Sync**: Automatically syncs with IB account
+- **Real-time Signals**: Generates signals from categorized strategies
+- **Trailing Stops**: 20% trailing stop for all positions
+- **Auto Dashboard**: Updates every 60 seconds
+- **Trade Logging**: All trades logged with timestamps
+
+### Dashboard (ib_dashboard.html)
+
+The live dashboard shows:
+- **Stats Bar**: Unrealized P&L, Market Value, Daily P&L, Position Count
+- **Positions Table**: Symbol, Direction (LONG/SHORT), Qty, Cost, Current, P&L, Stop Price
+- **P&L Chart**: Bar chart of position P&L
+- **Trade Log**: Recent trades with status
+
+### Quick Start (Live Trading)
+
+```bash
+# 1. Start TWS/Gateway on port 7497
+
+# 2. Generate strategy signals
+python new5.py --long-short
+
+# 3. Start live trading
+python ib_paper_trader.py
+
+# Or sync and view dashboard only
+python ib_paper_trader.py --sync
+```
+
+### State Persistence
+
+The trader saves state to `ib_paper_trader_state.json`:
+- Current positions with entry prices
+- Trailing stop prices (highest/lowest)
+- Active signals per symbol
+- Trade log history
+
 ## Output Files
 
 | File | Description |
 |------|-------------|
 | `long_short_categorized.json` | **Separate LONG/SHORT assignments** |
+| `ib_paper_trader_state.json` | Live trading state |
+| `ib_dashboard.html` | Live trading dashboard |
 | `htf_categorized_results.json` | Combined strategy assignments |
 | `multi_portfolio_results.json` | Portfolio performance by category |
 | `ticker_assignments.json` | All strategy results |
