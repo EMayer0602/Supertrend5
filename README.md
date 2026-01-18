@@ -7,8 +7,10 @@ A comprehensive trading system with strategy optimization, backtesting, and port
 - **Multi-Strategy Support**: SUPERTREND, JMA, KAMA, EMA, SMA
 - **HTF Filter**: Higher Time Frame filter for trend confirmation
 - **Walk-Forward Analysis**: Out-of-sample validation
+- **Separate LONG/SHORT Optimization**: Different parameters for each direction
 - **Portfolio Simulation**: 30 positions (10 B&H + 20 Strategy)
 - **Long & Short Trading**: Full directional trading support
+- **Long-Only Mode**: Option to disable short trading
 - **HTML Reports**: Interactive charts and trade lists
 
 ## Requirements
@@ -23,12 +25,12 @@ pip install ib_insync pandas numpy plotly
 
 ## Quick Start
 
-### 1. Strategy Optimization (Walk-Forward)
+### 1. Strategy Optimization (Separate LONG/SHORT)
 
-Optimize strategies on 9 months of historical data, reserving last 3 months for testing:
+Optimize strategies separately for LONG and SHORT with different parameters:
 
 ```bash
-python new5.py --walk-forward
+python new5.py --long-short
 ```
 
 ### 2. Portfolio Simulation
@@ -36,19 +38,65 @@ python new5.py --walk-forward
 Run portfolio simulation on the test period:
 
 ```bash
+# Long & Short trading
 python portfolio_simulation.py 90
+
+# Long only (no shorts)
+python portfolio_simulation.py 90 --long-only
 ```
 
 ## CLI Options (new5.py)
 
 | Option | Description |
 |--------|-------------|
+| `--long-short` | **Separate LONG/SHORT optimization** (recommended) |
 | `--walk-forward` | Walk-forward analysis (9M optimize, 3M test) |
 | `--htf-full` | Full HTF analysis with portfolio simulation |
 | `--htf-compare` | HTF comparison and categorization only |
 | `--all` | Optimize all tickers (365 days) |
 | `--multi` | Multi-ticker analysis |
 | `--screen` | Screen for Supertrend stocks |
+
+## CLI Options (portfolio_simulation.py)
+
+```bash
+python portfolio_simulation.py [days] [--long-only]
+```
+
+| Option | Description |
+|--------|-------------|
+| `days` | Number of days to simulate (default: 180) |
+| `--long-only` | Only trade LONG positions (no shorts) |
+
+## Separate LONG/SHORT Optimization
+
+Short strategies often need different parameters than long strategies because markets fall faster than they rise.
+
+### Parameter Differences
+
+| Parameter | LONG | SHORT |
+|-----------|------|-------|
+| **SUPERTREND Period** | 10, 14, 20 | 7, 10, 14 (shorter) |
+| **SUPERTREND Multiplier** | 2.0, 3.0, 4.0 | 1.5, 2.0, 2.5, 3.0 (tighter) |
+| **MA Fast** | 7-30 | 5-20 (faster) |
+| **MA Slow** | 21-200 | 14-50 (shorter) |
+| **Min PnL Threshold** | 15% | 15% |
+
+### Categories (Separate)
+
+**LONG Categories:**
+- `SUPERTREND_LONG_HTF`, `SUPERTREND_LONG_NOHTF`
+- `JMA_LONG_HTF`, `JMA_LONG_NOHTF`
+- `KAMA_LONG_HTF`, `KAMA_LONG_NOHTF`
+- `EMA_LONG_HTF`, `EMA_LONG_NOHTF`
+- `SMA_LONG_HTF`, `SMA_LONG_NOHTF`
+
+**SHORT Categories:**
+- `SUPERTREND_SHORT_HTF`, `SUPERTREND_SHORT_NOHTF`
+- `JMA_SHORT_HTF`, `JMA_SHORT_NOHTF`
+- `KAMA_SHORT_HTF`, `KAMA_SHORT_NOHTF`
+- `EMA_SHORT_HTF`, `EMA_SHORT_NOHTF`
+- `SMA_SHORT_HTF`, `SMA_SHORT_NOHTF`
 
 ## Portfolio Simulation
 
@@ -81,6 +129,7 @@ Daily PnL = Quantity × (Close - Previous Close)
 
 **Strategy Positions (20 positions)**:
 - Long/Short based on strategy signals
+- Uses **separate optimized parameters** for LONG vs SHORT
 - Signal flow:
   - Bullish crossover → COVER (if short) → BUY
   - Bearish crossover → SELL (if long) → SHORT
@@ -88,23 +137,28 @@ Daily PnL = Quantity × (Close - Previous Close)
 ## Strategies
 
 ### SUPERTREND
-- Parameters: `period` (10, 14, 20), `multiplier` (2.0, 3.0, 4.0)
-- Signal: Direction change from -1 to 1 (buy) or 1 to -1 (sell)
+- **LONG**: `period` (10, 14, 20), `multiplier` (2.0, 3.0, 4.0)
+- **SHORT**: `period` (7, 10, 14), `multiplier` (1.5, 2.0, 2.5, 3.0)
+- Signal: Direction change
 
 ### JMA (Jurik Moving Average)
-- Parameters: `fast` (7, 10, 14), `slow` (21, 30, 50)
+- **LONG**: `fast` (7, 10, 14), `slow` (21, 30, 50)
+- **SHORT**: `fast` (5, 7, 10), `slow` (14, 21, 30)
 - Signal: Fast/Slow crossover
 
 ### KAMA (Kaufman Adaptive MA)
-- Parameters: `period` (10, 14, 20), `signal` (10, 14, 21)
+- **LONG**: `period` (10, 14, 20), `signal` (10, 14, 21)
+- **SHORT**: `period` (7, 10, 14), `signal` (7, 10, 14)
 - Signal: KAMA/Signal line crossover
 
 ### EMA (Exponential MA)
-- Parameters: `fast` (8, 12, 20), `slow` (21, 26, 50)
+- **LONG**: `fast` (8, 12, 20), `slow` (21, 26, 50)
+- **SHORT**: `fast` (5, 8, 12), `slow` (13, 21, 26)
 - Signal: Fast/Slow crossover
 
 ### SMA (Simple MA)
-- Parameters: `fast` (10, 20, 30), `slow` (50, 100, 200)
+- **LONG**: `fast` (10, 20, 30), `slow` (50, 100, 200)
+- **SHORT**: `fast` (5, 10, 20), `slow` (20, 30, 50)
 - Signal: Fast/Slow crossover
 
 ## HTF Filter
@@ -112,14 +166,15 @@ Daily PnL = Quantity × (Close - Previous Close)
 Higher Time Frame filter uses weekly Supertrend to filter daily signals:
 - `_HTF` suffix: Strategy with HTF filter enabled
 - `_NOHTF` suffix: Strategy without HTF filter
-
-Only buy signals when weekly trend is bullish.
+- LONG: Only buy when weekly trend is bullish
+- SHORT: Only short when weekly trend is bearish
 
 ## Output Files
 
 | File | Description |
 |------|-------------|
-| `htf_categorized_results.json` | Strategy assignments per symbol |
+| `long_short_categorized.json` | **Separate LONG/SHORT assignments** |
+| `htf_categorized_results.json` | Combined strategy assignments |
 | `multi_portfolio_results.json` | Portfolio performance by category |
 | `ticker_assignments.json` | All strategy results |
 | `portfolio_report.html` | Interactive HTML report |
@@ -155,64 +210,61 @@ Only buy signals when weekly trend is bullish.
 
 ## Usage Scenarios
 
-### Scenario 1: Walk-Forward Analysis (Recommended)
+### Scenario 1: Separate LONG/SHORT Optimization (Recommended)
 
-Best practice for validating strategies on out-of-sample data:
+Best results with direction-specific parameters:
 
 ```bash
 # 1. Start TWS/Gateway
 
-# 2. Optimize on 9 months, test on last 3 months
-python new5.py --walk-forward
+# 2. Optimize LONG and SHORT separately
+python new5.py --long-short
 
-# 3. Run portfolio simulation on test period (90 days)
+# 3. Run portfolio simulation (Long & Short)
 python portfolio_simulation.py 90
 
 # 4. View results
 open portfolio_report.html
 ```
 
-### Scenario 2: Quick Strategy Scan
+### Scenario 2: Long-Only Trading
+
+If short strategies underperform:
+
+```bash
+# 1. Optimize (or use existing)
+python new5.py --long-short
+
+# 2. Run simulation with LONG only
+python portfolio_simulation.py 90 --long-only
+```
+
+### Scenario 3: Walk-Forward Analysis
+
+```bash
+# Optimize on 9 months, test on last 3 months
+python new5.py --walk-forward
+
+# Run simulation
+python portfolio_simulation.py 90
+```
+
+### Scenario 4: Quick Strategy Scan
 
 Find best strategies for all symbols:
 
 ```bash
-# Full HTF analysis (6 months)
 python new5.py --htf-full
 ```
 
-### Scenario 3: Single Symbol Analysis
-
-Test a single symbol with all strategies:
-
-```bash
-python new5.py AAPL
-```
-
-### Scenario 4: Custom Simulation Period
+### Scenario 5: Custom Simulation Period
 
 ```bash
 # 6-month simulation
 python portfolio_simulation.py 180
 
-# 1-year simulation
-python portfolio_simulation.py 365
-```
-
-### Scenario 5: Strategy Screening
-
-Find stocks currently in Supertrend uptrend:
-
-```bash
-python new5.py --screen
-```
-
-### Scenario 6: Full Year Optimization
-
-Optimize all strategies over 1 year:
-
-```bash
-python new5.py --all
+# 1-year simulation, long only
+python portfolio_simulation.py 365 --long-only
 ```
 
 ## Complete Workflow Example
@@ -220,23 +272,22 @@ python new5.py --all
 ```bash
 # Step 1: Ensure TWS is running on port 7497
 
-# Step 2: Walk-forward optimization
-# - Trains on data from 12-3 months ago
-# - Saves best strategies to htf_categorized_results.json
-python new5.py --walk-forward
+# Step 2: Separate LONG/SHORT optimization
+# - Different parameters for each direction
+# - Saves to long_short_categorized.json
+python new5.py --long-short
 
-# Step 3: Portfolio simulation on unseen data
-# - Uses strategies from Step 2
+# Step 3: Portfolio simulation
+# - Uses direction-specific parameters
 # - Simulates last 90 days with $20,000
 # - Generates portfolio_report.html
 python portfolio_simulation.py 90
 
+# Alternative: Long-only if shorts underperform
+python portfolio_simulation.py 90 --long-only
+
 # Step 4: Review results
-# - Check portfolio_report.html for:
-#   - Equity curve
-#   - Trade statistics
-#   - Open/Closed positions (Long & Short)
-#   - Win rate, Sharpe ratio, Max drawdown
+open portfolio_report.html
 ```
 
 ## Interpreting Results
@@ -258,36 +309,21 @@ python portfolio_simulation.py 90
 
 ### JSON Output Files
 
-**htf_categorized_results.json:**
+**long_short_categorized.json (NEW):**
 ```json
 {
-  "categories": {
-    "SUPERTREND_HTF": [
+  "long_categories": {
+    "SUPERTREND_LONG_HTF": [
       {"symbol": "AAPL", "return": 0.45, "params": {"period": 10, "multiplier": 3.0}}
-    ],
-    "JMA_NOHTF": [...],
-    "UNDERPERFORM": [...]
+    ]
+  },
+  "short_categories": {
+    "SUPERTREND_SHORT_HTF": [
+      {"symbol": "TSLA", "return": 0.25, "params": {"period": 7, "multiplier": 2.0}}
+    ]
   }
 }
 ```
-
-**portfolio_report.html:**
-- Interactive Plotly charts
-- Sortable trade tables
-- Color-coded P&L (green/red)
-
-## Categories (PnL >= 30%)
-
-| Category | Description |
-|----------|-------------|
-| `SUPERTREND_HTF` | Supertrend with HTF filter |
-| `SUPERTREND_NOHTF` | Supertrend without HTF |
-| `JMA_HTF` / `JMA_NOHTF` | JMA crossover |
-| `KAMA_HTF` / `KAMA_NOHTF` | KAMA crossover |
-| `EMA_HTF` / `EMA_NOHTF` | EMA crossover |
-| `SMA_HTF` / `SMA_NOHTF` | SMA crossover |
-| `BUYHOLD` | Buy & Hold is best |
-| `UNDERPERFORM` | Best PnL < 30% |
 
 ## License
 
