@@ -2088,6 +2088,19 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
     """
     import json
 
+    def sanitize_for_json(obj):
+        """Convert numpy types to native Python types for JSON serialization."""
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_for_json(item) for item in obj]
+        elif isinstance(obj, (np.bool_, np.generic)):
+            return obj.item()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+
     print("="*80)
     print("OPTIMIZE ALL TICKERS - MULTI-STRATEGY")
     print("Strategies: SUPERTREND, JMA, KAMA, EMA, SMA, BUYHOLD")
@@ -2181,7 +2194,7 @@ def optimize_all_tickers(days_back: int = 365, save_results: bool = True) -> Dic
         }
 
         with open('ticker_assignments.json', 'w') as f:
-            json.dump(output, f, indent=4)
+            json.dump(sanitize_for_json(output), f, indent=4)
         print(f"\nResults saved to: ticker_assignments.json")
 
     # Disconnect from TWS
