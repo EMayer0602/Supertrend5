@@ -85,58 +85,74 @@ def download_history(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
 
 
 # =============================================================================
-# PRE-DEFINED ZACKS RANK 1-2 STOCKS
-# Updated from https://www.zacks.com/stocks/zacks-rank
+# ZACKS TICKER LOADING
+# Load tickers from file or use command line input
+# Get your Zacks Rank 1 list from: https://www.zacks.com/stocks/zacks-rank
 # =============================================================================
 
-# Zacks Rank 1 = Strong Buy
-ZACKS_RANK_1 = [
-    # Tech - Strong Buy
-    'NVDA', 'AVGO', 'AMD', 'MRVL', 'ON', 'ANET', 'CRWD', 'PANW', 'FTNT',
-    # Semiconductors
-    'KLAC', 'LRCX', 'AMAT', 'NXPI', 'ADI', 'MCHP',
-    # Cloud/Software
-    'NOW', 'SNOW', 'DDOG', 'NET', 'ZS',
-    # E-commerce/Retail
-    'AMZN', 'COST', 'ORLY', 'ULTA', 'DECK',
-    # Healthcare/Biotech
-    'LLY', 'VRTX', 'REGN', 'ISRG', 'DXCM',
-    # Finance
-    'V', 'MA', 'AXP', 'COIN',
-    # Energy
-    'FANG', 'DVN', 'EOG',
-    # Other Growth
-    'META', 'GOOGL', 'NFLX', 'BKNG', 'ABNB'
-]
+def load_zacks_tickers(filename: str) -> Dict[str, int]:
+    """
+    Load Zacks tickers from a JSON or TXT file.
 
-# Zacks Rank 2 = Buy
-ZACKS_RANK_2 = [
-    # Tech - Buy
-    'AAPL', 'MSFT', 'CSCO', 'QCOM', 'TXN', 'MU', 'INTC',
-    # Software
-    'ADBE', 'CRM', 'INTU', 'ADSK', 'SNPS', 'CDNS',
-    # Internet
-    'GOOG', 'PYPL', 'SQ', 'SHOP', 'MELI',
-    # Consumer
-    'TSLA', 'NKE', 'SBUX', 'CMG',
-    # Healthcare
-    'PFE', 'ABBV', 'MRK', 'AMGN', 'GILD',
-    # Industrial
-    'HON', 'CAT', 'DE', 'GE',
-    # Comm
-    'TMUS', 'T', 'VZ'
-]
+    JSON format:
+    {
+        "rank1": ["AAPL", "NVDA", ...],
+        "rank2": ["MSFT", "GOOGL", ...]
+    }
 
-# All high-volatility NASDAQ stocks (for scanning)
-NASDAQ_VOLATILE = [
-    'NVDA', 'AMD', 'TSLA', 'META', 'AMZN', 'GOOGL', 'NFLX', 'AVGO',
-    'MRVL', 'ON', 'MU', 'AMAT', 'LRCX', 'KLAC', 'NXPI', 'ADI',
-    'CRWD', 'PANW', 'ZS', 'FTNT', 'DDOG', 'NET', 'SNOW', 'NOW',
-    'COIN', 'SQ', 'PYPL', 'SHOP', 'MELI', 'ABNB',
-    'ENPH', 'SEDG', 'FSLR', 'PLUG', 'RIVN', 'LCID',
-    'ROKU', 'ZM', 'DOCU', 'OKTA', 'PLTR', 'SOFI', 'HOOD', 'UPST',
-    'SMCI', 'ARM', 'CELH', 'AXON', 'DECK', 'ULTA'
-]
+    TXT format (one ticker per line, optionally with rank):
+    AAPL,1
+    NVDA,1
+    MSFT,2
+    GOOGL
+    """
+    tickers = {}
+
+    try:
+        if filename.endswith('.json'):
+            with open(filename, 'r') as f:
+                data = json.load(f)
+
+            # Support different JSON formats
+            if 'rank1' in data:
+                for t in data.get('rank1', []):
+                    tickers[t] = 1
+                for t in data.get('rank2', []):
+                    tickers[t] = 2
+            elif 'tickers' in data:
+                for t in data.get('tickers', []):
+                    tickers[t] = 1  # Default to rank 1
+            else:
+                # Assume it's a simple list
+                for t in data:
+                    tickers[t] = 1
+
+        else:  # TXT file
+            with open(filename, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+
+                    if ',' in line:
+                        parts = line.split(',')
+                        ticker = parts[0].strip().upper()
+                        rank = int(parts[1].strip()) if len(parts) > 1 else 1
+                    else:
+                        ticker = line.upper()
+                        rank = 1
+
+                    tickers[ticker] = rank
+
+        print(f"Loaded {len(tickers)} tickers from {filename}")
+        return tickers
+
+    except FileNotFoundError:
+        print(f"File not found: {filename}")
+        return {}
+    except Exception as e:
+        print(f"Error loading {filename}: {e}")
+        return {}
 
 
 def calculate_metrics(df: pd.DataFrame) -> dict:
@@ -190,42 +206,47 @@ def calculate_metrics(df: pd.DataFrame) -> dict:
 
 
 def scan_portfolio(
-    symbols: List[str] = None,
+    zacks_tickers: Dict[str, int] = None,
     min_atr_pct: float = 2.0,
     min_price: float = 10.0,
     max_price: float = 500.0,
     top_n: int = 30,
-    min_momentum: float = -10.0,
-    zacks_only: bool = True
+    min_momentum: float = -10.0
 ) -> List[dict]:
     """
-    Scan for high-volatility stocks with good momentum.
+    Scan Zacks-rated stocks for high volatility and momentum.
 
     Args:
-        symbols: List of symbols to scan
+        zacks_tickers: Dict of {symbol: rank} from Zacks
         min_atr_pct: Minimum ATR%
         min_price: Minimum stock price
         max_price: Maximum stock price
         top_n: Number of top stocks to return
         min_momentum: Minimum 3-month momentum %
-        zacks_only: Only include Zacks Rank 1-2 stocks
 
     Returns:
         List of qualifying stocks with metrics
     """
-    if symbols is None:
-        if zacks_only:
-            symbols = list(set(ZACKS_RANK_1 + ZACKS_RANK_2))
-            print(f"Using Zacks Rank 1-2 stocks: {len(symbols)} symbols")
-        else:
-            symbols = list(set(ZACKS_RANK_1 + ZACKS_RANK_2 + NASDAQ_VOLATILE))
-            print(f"Using all high-volatility stocks: {len(symbols)} symbols")
+    if not zacks_tickers:
+        print("ERROR: No tickers provided!")
+        print("\nBitte erstelle eine Datei mit Zacks Rank 1-2 Tickers:")
+        print("  1. Gehe zu https://www.zacks.com/stocks/zacks-rank")
+        print("  2. Kopiere die Rank 1 (Strong Buy) Tickers")
+        print("  3. Speichere sie in zacks_input.txt (ein Ticker pro Zeile)")
+        print("\nBeispiel zacks_input.txt:")
+        print("  AAPL,1")
+        print("  NVDA,1")
+        print("  MSFT,2")
+        print("\nDann: python zacks_scanner.py --input zacks_input.txt")
+        return []
 
-    results = []
+    symbols = list(zacks_tickers.keys())
     total = len(symbols)
 
-    print(f"\nScanning {total} symbols for ATR% >= {min_atr_pct} and Momentum >= {min_momentum}%...")
+    print(f"\nScanning {total} Zacks tickers for ATR% >= {min_atr_pct} and Momentum >= {min_momentum}%...")
     print("-" * 60)
+
+    results = []
 
     for i, symbol in enumerate(symbols, 1):
         print(f"\r[{i}/{total}] Downloading {symbol}...", end='', flush=True)
@@ -256,20 +277,14 @@ def scan_portfolio(
             if metrics['momentum_3m'] < min_momentum:
                 continue
 
-            # Determine Zacks rank
-            if symbol in ZACKS_RANK_1:
-                rank = 1
-                rank_label = 'Strong Buy'
-            elif symbol in ZACKS_RANK_2:
-                rank = 2
-                rank_label = 'Buy'
-            else:
-                rank = 3
-                rank_label = 'Hold'
+            # Get Zacks rank from input
+            rank = zacks_tickers.get(symbol, 3)
+            rank_labels = {1: 'Strong Buy', 2: 'Buy', 3: 'Hold', 4: 'Sell', 5: 'Strong Sell'}
+            rank_label = rank_labels.get(rank, 'Unknown')
 
             # Calculate score
             # Higher rank (Strong Buy) + higher volatility + positive momentum
-            rank_score = 4 - rank  # 3 for Strong Buy, 2 for Buy, 1 for Hold
+            rank_score = max(0, 4 - rank)  # 3 for Strong Buy, 2 for Buy, etc.
             vol_score = min(metrics['atr_pct'], 8) / 8  # Normalize 0-1
             mom_score = 1 + (metrics['momentum_3m'] / 100)
 
@@ -332,37 +347,54 @@ def print_results(results: List[dict]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Zacks Portfolio Scanner (IB)')
+    parser = argparse.ArgumentParser(
+        description='Zacks Portfolio Scanner (IB)',
+        epilog='''
+Beispiel:
+  1. Erstelle zacks_input.txt mit Zacks Rank 1-2 Tickers von https://www.zacks.com/stocks/zacks-rank
+  2. python zacks_scanner.py --input zacks_input.txt --top 30
+  3. python new5.py --long-short --tickers zacks_tickers.json
+        '''
+    )
+    parser.add_argument('--input', type=str, required=True, help='Input file with Zacks tickers (TXT or JSON)')
     parser.add_argument('--min-atr', type=float, default=2.0, help='Minimum ATR%%')
     parser.add_argument('--min-price', type=float, default=10.0, help='Minimum stock price')
     parser.add_argument('--max-price', type=float, default=500.0, help='Maximum stock price')
     parser.add_argument('--top', type=int, default=30, help='Number of top stocks to return')
     parser.add_argument('--min-momentum', type=float, default=-10.0, help='Minimum 3-month momentum %%')
     parser.add_argument('--output', type=str, default='zacks_tickers.json', help='Output filename')
-    parser.add_argument('--all', action='store_true', help='Include all volatile stocks, not just Zacks 1-2')
     parser.add_argument('--port', type=int, default=7497, help='TWS port (7497=Paper, 7496=Live)')
 
     args = parser.parse_args()
 
+    # Load Zacks tickers from input file
+    zacks_tickers = load_zacks_tickers(args.input)
+
+    if not zacks_tickers:
+        print("\nKeine Tickers geladen. Bitte Eingabedatei pruefen.")
+        return
+
     try:
         # Run scan
         results = scan_portfolio(
+            zacks_tickers=zacks_tickers,
             min_atr_pct=args.min_atr,
             min_price=args.min_price,
             max_price=args.max_price,
             top_n=args.top,
-            min_momentum=args.min_momentum,
-            zacks_only=not args.all
+            min_momentum=args.min_momentum
         )
 
         # Print and save results
         print_results(results)
-        save_results(results, args.output)
 
-        # Print usage hint
-        print(f"\nNachste Schritte:")
-        print(f"  1. python new5.py --long-short --tickers {args.output}")
-        print(f"  2. python portfolio_simulation.py 90 --take-profit 0.30 --min-return 0.25")
+        if results:
+            save_results(results, args.output)
+
+            # Print usage hint
+            print(f"\nNachste Schritte:")
+            print(f"  1. python new5.py --long-short --tickers {args.output}")
+            print(f"  2. python portfolio_simulation.py 90 --take-profit 0.30 --min-return 0.25")
 
     finally:
         disconnect_ib()
