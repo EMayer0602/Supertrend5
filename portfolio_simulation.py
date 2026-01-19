@@ -121,7 +121,9 @@ class PortfolioSimulator:
                  strategy_positions: int = 20,
                  fee_rate: float = 0.001,  # 0.1% fee
                  trailing_stop_pct: float = 0.20,
-                 long_only: bool = False):  # NEW: Only trade LONG positions
+                 take_profit_pct: float = 0.30,  # NEW: Take profit at 30%
+                 min_expected_return: float = 0.25,  # NEW: Min 25% expected return
+                 long_only: bool = False):
 
         self.initial_capital = initial_capital
         self.capital = initial_capital
@@ -130,7 +132,9 @@ class PortfolioSimulator:
         self.strategy_positions = strategy_positions
         self.fee_rate = fee_rate
         self.trailing_stop_pct = trailing_stop_pct
-        self.long_only = long_only  # NEW
+        self.take_profit_pct = take_profit_pct  # NEW
+        self.min_expected_return = min_expected_return  # NEW
+        self.long_only = long_only
 
         self.open_positions: Dict[str, Position] = {}  # symbol -> Position
         self.closed_positions: List[Position] = []
@@ -271,10 +275,28 @@ class PortfolioSimulator:
             if position.strategy == 'BUYHOLD' and symbol in prices:
                 position.update_price(prices[symbol])
                 if position.check_trailing_stop():
-                    to_close.append(symbol)
+                    to_close.append((symbol, "TRAILING_STOP"))
 
-        for symbol in to_close:
-            self.close_position(symbol, prices[symbol], date, "TRAILING_STOP")
+        for symbol, reason in to_close:
+            self.close_position(symbol, prices[symbol], date, reason)
+
+    def check_take_profit(self, date: datetime, prices: Dict[str, float]):
+        """Check and execute take profit for strategy positions (not B&H)"""
+        to_close = []
+
+        for symbol, position in self.open_positions.items():
+            if position.strategy == 'BUYHOLD' or symbol not in prices:
+                continue
+
+            position.update_price(prices[symbol])
+            pnl_pct = position.pnl_percent()
+
+            # Take profit when position reaches target
+            if pnl_pct >= self.take_profit_pct:
+                to_close.append((symbol, f"TAKE_PROFIT_{pnl_pct*100:.0f}%"))
+
+        for symbol, reason in to_close:
+            self.close_position(symbol, prices[symbol], date, reason)
 
     def process_strategy_signals(self, date: datetime, prices: Dict[str, float],
                                   signals: Dict[str, Dict]):
@@ -679,9 +701,18 @@ class PortfolioSimulator:
             # Check trailing stops
             self.check_trailing_stops(date, prices)
 
+            # Check take profit for strategy positions
+            self.check_take_profit(date, prices)
+
             # Generate and process strategy signals
+            # Only consider symbols with expected return >= min_expected_return
             signals = {}
             for symbol in self.strategy_assignments.keys():
+                # Filter by minimum expected return
+                expected_return = self.long_assignments.get(symbol, {}).get('return', 0)
+                if expected_return < self.min_expected_return:
+                    continue  # Skip low-quality symbols
+
                 signal = self.generate_strategy_signals(symbol, date)
                 if signal:
                     signals[symbol] = signal
@@ -1375,24 +1406,38 @@ class PortfolioSimulator:
         '''
 
 
-def run_portfolio_simulation(days_back: int = 180, long_only: bool = False):
+def run_portfolio_simulation(days_back: int = 180, long_only: bool = False,
+                             take_profit: float = 0.30, min_return: float = 0.25,
+                             max_pos: int = 30):
     """Main function to run portfolio simulation
 
     Args:
         days_back: Number of days to simulate
         long_only: If True, only trade LONG positions (no shorts)
+        take_profit: Take profit percentage (default 30%)
+        min_return: Minimum expected return to trade (default 25%)
+        max_pos: Maximum positions (default 30)
     """
     mode_str = "LONG ONLY" if long_only else "LONG & SHORT"
     print(f"\nTrading Mode: {mode_str}")
+    print(f"Take Profit: {take_profit*100:.0f}%")
+    print(f"Min Expected Return: {min_return*100:.0f}%")
+    print(f"Max Positions: {max_pos}")
+
+    # Adjust B&H and Strategy positions proportionally
+    bh_pos = max(5, int(max_pos * 0.33))  # ~33% B&H
+    strat_pos = max_pos - bh_pos
 
     simulator = PortfolioSimulator(
         initial_capital=20000.0,
-        max_positions=30,
-        bh_positions=10,
-        strategy_positions=20,
+        max_positions=max_pos,
+        bh_positions=bh_pos,
+        strategy_positions=strat_pos,
         fee_rate=0.001,  # 0.1%
         trailing_stop_pct=0.20,  # 20% trailing stop for B&H
-        long_only=long_only  # NEW
+        take_profit_pct=take_profit,  # NEW: Take profit level
+        min_expected_return=min_return,  # NEW: Min return filter
+        long_only=long_only
     )
 
     simulator.run_simulation(days_back=days_back, rebalance_freq=5)
@@ -1405,15 +1450,25 @@ def run_portfolio_simulation(days_back: int = 180, long_only: bool = False):
 
 if __name__ == "__main__":
     import sys
+    import argparse
 
-    days = 180
-    long_only = False
+    parser = argparse.ArgumentParser(description='Portfolio Simulation')
+    parser.add_argument('days', type=int, nargs='?', default=180, help='Days to simulate (default: 180)')
+    parser.add_argument('--long-only', action='store_true', help='Only trade LONG positions')
+    parser.add_argument('--take-profit', type=float, default=0.30, help='Take profit %% (default: 0.30 = 30%%)')
+    parser.add_argument('--min-return', type=float, default=0.25, help='Min expected return (default: 0.25 = 25%%)')
+    parser.add_argument('--max-pos', type=int, default=30, help='Max positions (default: 30)')
 
-    # Parse arguments
-    for arg in sys.argv[1:]:
-        if arg == "--long-only":
-            long_only = True
-        elif arg.isdigit():
-            days = int(arg)
+    args = parser.parse_args()
 
-    run_portfolio_simulation(days_back=days, long_only=long_only)
+    print("\n" + "="*60)
+    print("OPTIMIZED PORTFOLIO SIMULATION")
+    print("="*60)
+
+    run_portfolio_simulation(
+        days_back=args.days,
+        long_only=args.long_only,
+        take_profit=args.take_profit,
+        min_return=args.min_return,
+        max_pos=args.max_pos
+    )
