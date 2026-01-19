@@ -971,8 +971,87 @@ class IBPaperTrader:
             logger.error(f"Market data check failed: {e}")
             return False
 
+    def run_dry_run(self):
+        """
+        DRY-RUN MODE: Show what orders would be placed WITHOUT TWS connection.
+        Uses stored returns from long_short_categorized.json.
+        """
+        logger.info("=" * 60)
+        logger.info("DRY-RUN MODE - No TWS connection required")
+        logger.info("=" * 60)
+
+        # Show current state
+        logger.info(f"Current capital: ${self.capital:,.2f}")
+        logger.info(f"Current positions: {len(self.positions)}")
+        stake = self.capital / MAX_POSITIONS
+        logger.info(f"Stake per position: ${stake:,.2f}")
+
+        # Get B&H candidates (uses stored returns, no download needed)
+        bh_candidates = self.get_best_bh_candidates()
+        bh_symbols = [sym for sym, _, _ in bh_candidates]
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"BUY & HOLD ORDERS ({BH_POSITIONS} positions)")
+        logger.info("=" * 60)
+
+        for symbol, ret, _ in bh_candidates:
+            if symbol in self.positions:
+                logger.info(f"  [SKIP] {symbol}: Already in positions")
+                continue
+
+            # Estimate quantity based on stake (no real price available)
+            # Use a placeholder message
+            strategy = self.long_assignments[symbol].get('strategy', 'UNKNOWN')
+            logger.info(f"  [BUY] {symbol}")
+            logger.info(f"        Strategy: {strategy}")
+            logger.info(f"        Expected Return: {ret*100:+.1f}%")
+            logger.info(f"        Stake: ${stake:,.2f}")
+            logger.info(f"        (Quantity will be calculated at order time)")
+
+        # Get strategy candidates info (no download, just show what we would check)
+        # Filter out B&H symbols
+        strategy_pool = [
+            (sym, data) for sym, data in self.long_assignments.items()
+            if data.get('return', 0) >= 0.15 and sym not in bh_symbols
+        ]
+        strategy_pool.sort(key=lambda x: x[1].get('return', 0), reverse=True)
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"STRATEGY CANDIDATES ({STRATEGY_POSITIONS} positions)")
+        logger.info("=" * 60)
+        logger.info("Note: In live mode, these would be checked for bullish trend")
+        logger.info(f"Pool: {len(strategy_pool)} symbols (sorted by expected return)")
+        logger.info("")
+
+        # Show top candidates that would be checked
+        for i, (symbol, data) in enumerate(strategy_pool[:STRATEGY_POSITIONS + 5]):
+            strategy = data.get('strategy', 'UNKNOWN')
+            ret = data.get('return', 0)
+            status = "Would check trend" if i < STRATEGY_POSITIONS else "Backup"
+            logger.info(f"  [{i+1:2d}] {symbol}: {strategy} (exp: {ret*100:+.1f}%) - {status}")
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("DRY-RUN SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"  B&H positions to open: {len([c for c in bh_candidates if c[0] not in self.positions])}")
+        logger.info(f"  Strategy pool size: {len(strategy_pool)}")
+        logger.info(f"  Total target positions: {MAX_POSITIONS}")
+        logger.info("")
+        logger.info("To execute these orders, run without --dry-run flag with TWS running.")
+        logger.info("=" * 60)
+
     def run_trading_loop(self, force: bool = False):
         """Main trading loop"""
+        # DRY-RUN MODE: Works without TWS connection
+        if self.dry_run:
+            logger.info("DRY-RUN: Running without TWS connection")
+            self.run_dry_run()
+            return
+
+        # LIVE MODE: Requires TWS connection
         if not self.connected:
             if not self.connect():
                 return
@@ -981,11 +1060,8 @@ class IBPaperTrader:
             # Sync positions from IB
             self.sync_positions()
 
-            # Check market data (skip in dry-run mode to avoid hanging)
-            if not self.dry_run:
-                self.check_data_subscription()
-            else:
-                logger.info("Skipping market data check in dry-run mode")
+            # Check market data
+            self.check_data_subscription()
 
             # Open initial positions if we have less than target
             if len(self.positions) < MAX_POSITIONS:
@@ -994,13 +1070,6 @@ class IBPaperTrader:
 
             # Save state after initial opening
             self.save_state()
-
-            # In dry-run mode, exit after showing orders
-            if self.dry_run:
-                logger.info("=" * 60)
-                logger.info("DRY-RUN complete. No orders were sent.")
-                logger.info("=" * 60)
-                return
 
             # Subscribe to PnL
             accounts = self.ib.managedAccounts()
