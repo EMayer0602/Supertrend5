@@ -342,6 +342,11 @@ def get_ma_crossover_signals(close: np.ndarray, fast_ma: np.ndarray, slow_ma: np
 # =============================================================================
 def resample_to_weekly(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """Resample daily data to weekly for HTF analysis"""
+    # Ensure index is DatetimeIndex for resampling
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df = df.copy()
+        df.index = pd.to_datetime(df.index)
+
     ohlc_dict = {
         f'Open_{symbol}': 'first',
         f'High_{symbol}': 'max',
