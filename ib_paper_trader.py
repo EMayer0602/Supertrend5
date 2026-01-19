@@ -670,16 +670,17 @@ class IBPaperTrader:
 
     def get_best_bh_candidates(self) -> List[Tuple[str, float]]:
         """
-        Find best 10 Buy & Hold candidates based on recent performance.
+        Find best 10 Buy & Hold candidates from pre-filtered symbols.
+        Only uses symbols from long_short_categorized.json (already >= 15% PnL).
         Returns list of (symbol, return, price) sorted by return descending.
         """
-        from new5 import ALL_TICKERS
-
+        # Use only pre-filtered symbols from categorization (not ALL_TICKERS)
+        symbols = list(self.long_assignments.keys())
         candidates = []
-        total = len(ALL_TICKERS)
-        logger.info(f"Scanning {total} symbols for B&H candidates...")
+        total = len(symbols)
+        logger.info(f"Scanning {total} pre-filtered symbols for B&H candidates...")
 
-        for i, symbol in enumerate(ALL_TICKERS, 1):
+        for i, symbol in enumerate(symbols, 1):
             try:
                 # Show progress every symbol
                 action = 'Downloading' if symbol not in self.price_data else 'Checking'
