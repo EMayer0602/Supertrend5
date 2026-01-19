@@ -676,10 +676,14 @@ class IBPaperTrader:
         from new5 import ALL_TICKERS
 
         candidates = []
-        logger.info(f"Scanning {len(ALL_TICKERS)} symbols for B&H candidates...")
+        total = len(ALL_TICKERS)
+        logger.info(f"Scanning {total} symbols for B&H candidates...")
 
-        for symbol in ALL_TICKERS:
+        for i, symbol in enumerate(ALL_TICKERS, 1):
             try:
+                # Show progress
+                print(f"\r  [{i}/{total}] {'Downloading' if symbol not in self.price_data else 'Checking'} {symbol}...          ", end='', flush=True)
+
                 if symbol not in self.price_data:
                     df = self.download_price_data(symbol, BH_LOOKBACK_DAYS + 10)
                     if df is not None:
@@ -706,6 +710,9 @@ class IBPaperTrader:
             except Exception as e:
                 logger.debug(f"Error checking {symbol}: {e}")
 
+        # Clear progress line
+        print("\r" + " " * 60 + "\r", end='', flush=True)
+
         # Sort by return descending and return top 10
         candidates.sort(key=lambda x: x[1], reverse=True)
         top_candidates = candidates[:BH_POSITIONS]
@@ -722,10 +729,17 @@ class IBPaperTrader:
         Returns list of (symbol, strategy, price) for symbols with active BUY signal.
         """
         candidates = []
+        symbols = list(self.long_assignments.keys())
+        total = len(symbols)
+
+        logger.info(f"Scanning {total} symbols for strategy signals...")
 
         # Check all symbols with LONG assignments
-        for symbol in self.long_assignments:
+        for i, symbol in enumerate(symbols, 1):
             try:
+                # Show progress
+                print(f"\r  [{i}/{total}] {'Downloading' if symbol not in self.price_data else 'Checking'} {symbol}...          ", end='', flush=True)
+
                 signal = self.generate_signal(symbol)
 
                 # We want symbols where the strategy is bullish (not just crossover today)
@@ -795,6 +809,9 @@ class IBPaperTrader:
 
             except Exception as e:
                 logger.debug(f"Error checking {symbol}: {e}")
+
+        # Clear progress line
+        print("\r" + " " * 60 + "\r", end='', flush=True)
 
         # Sort by expected return and limit to STRATEGY_POSITIONS
         candidates.sort(key=lambda x: x[3], reverse=True)
