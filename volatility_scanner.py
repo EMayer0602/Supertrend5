@@ -205,7 +205,7 @@ def print_volatility_report(results: List[Dict], top_n: int = 30):
 
 def run_volatility_scan(top_n: int = 30, min_atr: float = 2.0,
                         min_price: float = 10.0, max_price: float = 500.0,
-                        save: bool = True):
+                        save: bool = True, tickers: List[str] = None):
     """
     Main function to run volatility scan and filter.
 
@@ -215,12 +215,14 @@ def run_volatility_scan(top_n: int = 30, min_atr: float = 2.0,
         min_price: Minimum stock price
         max_price: Maximum stock price
         save: Whether to save results to file
+        tickers: Custom ticker list (default: ALL_TICKERS)
 
     Returns:
         List of filtered volatile tickers
     """
-    # Scan all tickers
+    # Scan tickers
     results = scan_volatility(
+        tickers=tickers,
         days=100,
         min_price=min_price,
         max_price=max_price
@@ -248,6 +250,7 @@ def run_volatility_scan(top_n: int = 30, min_atr: float = 2.0,
 
 if __name__ == "__main__":
     import argparse
+    import json
 
     parser = argparse.ArgumentParser(description='Volatility Scanner')
     parser.add_argument('--top', type=int, default=30, help='Top N volatile stocks (default: 30)')
@@ -255,15 +258,28 @@ if __name__ == "__main__":
     parser.add_argument('--min-price', type=float, default=10.0, help='Min price (default: $10)')
     parser.add_argument('--max-price', type=float, default=500.0, help='Max price (default: $500)')
     parser.add_argument('--no-save', action='store_true', help='Do not save results to file')
+    parser.add_argument('--tickers', type=str, help='JSON file with tickers (e.g., analyst_tickers.json)')
 
     args = parser.parse_args()
+
+    # Load tickers from file if provided
+    custom_tickers = None
+    if args.tickers:
+        try:
+            with open(args.tickers, 'r') as f:
+                data = json.load(f)
+                custom_tickers = data.get('tickers', [])
+                print(f"Loaded {len(custom_tickers)} tickers from {args.tickers}")
+        except Exception as e:
+            print(f"Error loading tickers: {e}")
 
     results = run_volatility_scan(
         top_n=args.top,
         min_atr=args.min_atr,
         min_price=args.min_price,
         max_price=args.max_price,
-        save=not args.no_save
+        save=not args.no_save,
+        tickers=custom_tickers
     )
 
     print(f"\n{'='*60}")
