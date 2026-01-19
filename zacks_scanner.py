@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Zacks-Style Portfolio Scanner
-Scans for stocks with high volatility and positive momentum.
-Filters for Zacks Rank 1-2 stocks (pre-defined list).
+Analyst Rating Portfolio Scanner
+Scans for stocks with Strong Buy/Buy analyst ratings from Nasdaq.
+Combines ratings with volatility and momentum metrics.
 
-Uses IB TWS for price data.
+Uses:
+- Nasdaq API for analyst ratings (Buy/Hold/Sell counts)
+- IB TWS for price data
 """
 
 import json
+import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -26,6 +29,106 @@ except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 from ib_insync import IB, Stock, util
+
+
+# =============================================================================
+# NASDAQ ANALYST API
+# =============================================================================
+
+def get_nasdaq_analyst_rating(symbol: str) -> Optional[dict]:
+    """
+    Get analyst ratings from Nasdaq API.
+    Returns buy/hold/sell counts and target price.
+    """
+    try:
+        url = f'https://api.nasdaq.com/api/analyst/{symbol}/targetprice'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+        }
+
+        response = requests.get(url, headers=headers, timeout=10)
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        overview = data.get('data', {}).get('consensusOverview', {})
+
+        if not overview:
+            return None
+
+        buy = overview.get('buy', 0)
+        hold = overview.get('hold', 0)
+        sell = overview.get('sell', 0)
+        total = buy + hold + sell
+
+        if total == 0:
+            return None
+
+        # Calculate rank based on analyst consensus
+        buy_pct = buy / total * 100
+
+        if buy_pct >= 80:
+            rank = 1  # Strong Buy (80%+ Buy ratings)
+            rank_label = 'Strong Buy'
+        elif buy_pct >= 60:
+            rank = 2  # Buy (60-80% Buy ratings)
+            rank_label = 'Buy'
+        elif buy_pct >= 40:
+            rank = 3  # Hold
+            rank_label = 'Hold'
+        else:
+            rank = 4  # Sell
+            rank_label = 'Sell'
+
+        return {
+            'buy': buy,
+            'hold': hold,
+            'sell': sell,
+            'total': total,
+            'buy_pct': round(buy_pct, 1),
+            'rank': rank,
+            'rank_label': rank_label,
+            'target_price': overview.get('priceTarget', 0),
+            'target_low': overview.get('lowPriceTarget', 0),
+            'target_high': overview.get('highPriceTarget', 0)
+        }
+
+    except Exception as e:
+        return None
+
+
+def scan_nasdaq_ratings(symbols: List[str], max_rank: int = 2, min_analysts: int = 5) -> Dict[str, dict]:
+    """
+    Scan multiple symbols for analyst ratings via Nasdaq API.
+
+    Args:
+        symbols: List of ticker symbols
+        max_rank: Maximum rank to include (1=Strong Buy, 2=Buy)
+        min_analysts: Minimum number of analysts required
+
+    Returns:
+        Dict of {symbol: rating_data} for qualifying stocks
+    """
+    results = {}
+    total = len(symbols)
+
+    print(f"\nFetching analyst ratings for {total} symbols from Nasdaq...")
+    print("-" * 60)
+
+    for i, symbol in enumerate(symbols, 1):
+        print(f"\r[{i}/{total}] Checking {symbol}...", end='', flush=True)
+
+        rating = get_nasdaq_analyst_rating(symbol)
+
+        if rating and rating['total'] >= min_analysts and rating['rank'] <= max_rank:
+            results[symbol] = rating
+
+        time.sleep(0.1)  # Rate limiting
+
+    print(f"\n\nFound {len(results)} stocks with Rank <= {max_rank}")
+    return results
 
 
 # =============================================================================
@@ -85,74 +188,48 @@ def download_history(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
 
 
 # =============================================================================
-# ZACKS TICKER LOADING
-# Load tickers from file or use command line input
-# Get your Zacks Rank 1 list from: https://www.zacks.com/stocks/zacks-rank
+# SYMBOL LISTS
 # =============================================================================
 
-def load_zacks_tickers(filename: str) -> Dict[str, int]:
-    """
-    Load Zacks tickers from a JSON or TXT file.
+# NASDAQ-100 Components
+NASDAQ_100 = [
+    'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'GOOG', 'META', 'TSLA', 'AVGO', 'COST',
+    'NFLX', 'AMD', 'ADBE', 'PEP', 'CSCO', 'INTC', 'CMCSA', 'TMUS', 'QCOM', 'TXN',
+    'AMGN', 'INTU', 'AMAT', 'ISRG', 'HON', 'BKNG', 'LRCX', 'VRTX', 'MU', 'ADI',
+    'REGN', 'SBUX', 'MDLZ', 'KLAC', 'GILD', 'PANW', 'SNPS', 'CDNS', 'ASML', 'MELI',
+    'PYPL', 'CRWD', 'MAR', 'CTAS', 'ORLY', 'CSX', 'MNST', 'NXPI', 'MRVL', 'WDAY',
+    'ADSK', 'PCAR', 'FTNT', 'ROST', 'DXCM', 'ADP', 'CHTR', 'KDP', 'AEP', 'PAYX',
+    'MCHP', 'KHC', 'CPRT', 'MRNA', 'ODFL', 'EXC', 'LULU', 'IDXX', 'FAST', 'EA',
+    'CTSH', 'CSGP', 'VRSK', 'XEL', 'GEHC', 'DDOG', 'ANSS', 'FANG', 'BKR', 'TEAM',
+    'ZS', 'DLTR', 'WBD', 'TTWO', 'ILMN', 'WBA', 'ALGN', 'ENPH', 'ON', 'ARM'
+]
 
-    JSON format:
-    {
-        "rank1": ["AAPL", "NVDA", ...],
-        "rank2": ["MSFT", "GOOGL", ...]
-    }
+# High-volatility growth stocks
+GROWTH_STOCKS = [
+    'COIN', 'SQ', 'SHOP', 'ABNB', 'RIVN', 'LCID', 'PLTR', 'SOFI', 'HOOD', 'UPST',
+    'SMCI', 'ROKU', 'ZM', 'DOCU', 'NET', 'SNOW', 'MDB', 'OKTA', 'BILL', 'CELH',
+    'AXON', 'DECK', 'ULTA', 'LLY', 'NOW', 'CRM', 'ORCL', 'IBM', 'ACN', 'DELL'
+]
 
-    TXT format (one ticker per line, optionally with rank):
-    AAPL,1
-    NVDA,1
-    MSFT,2
-    GOOGL
-    """
-    tickers = {}
-
+def load_symbols_from_file(filename: str) -> List[str]:
+    """Load symbols from a TXT file (one per line)."""
+    symbols = []
     try:
-        if filename.endswith('.json'):
-            with open(filename, 'r') as f:
-                data = json.load(f)
-
-            # Support different JSON formats
-            if 'rank1' in data:
-                for t in data.get('rank1', []):
-                    tickers[t] = 1
-                for t in data.get('rank2', []):
-                    tickers[t] = 2
-            elif 'tickers' in data:
-                for t in data.get('tickers', []):
-                    tickers[t] = 1  # Default to rank 1
-            else:
-                # Assume it's a simple list
-                for t in data:
-                    tickers[t] = 1
-
-        else:  # TXT file
-            with open(filename, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-
-                    if ',' in line:
-                        parts = line.split(',')
-                        ticker = parts[0].strip().upper()
-                        rank = int(parts[1].strip()) if len(parts) > 1 else 1
-                    else:
-                        ticker = line.upper()
-                        rank = 1
-
-                    tickers[ticker] = rank
-
-        print(f"Loaded {len(tickers)} tickers from {filename}")
-        return tickers
-
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    # Handle comma-separated format (TICKER,rank)
+                    ticker = line.split(',')[0].strip().upper()
+                    symbols.append(ticker)
+        print(f"Loaded {len(symbols)} symbols from {filename}")
+        return symbols
     except FileNotFoundError:
         print(f"File not found: {filename}")
-        return {}
+        return []
     except Exception as e:
         print(f"Error loading {filename}: {e}")
-        return {}
+        return []
 
 
 def calculate_metrics(df: pd.DataFrame) -> dict:
@@ -206,7 +283,7 @@ def calculate_metrics(df: pd.DataFrame) -> dict:
 
 
 def scan_portfolio(
-    zacks_tickers: Dict[str, int] = None,
+    analyst_ratings: Dict[str, dict],
     min_atr_pct: float = 2.0,
     min_price: float = 10.0,
     max_price: float = 500.0,
@@ -214,10 +291,10 @@ def scan_portfolio(
     min_momentum: float = -10.0
 ) -> List[dict]:
     """
-    Scan Zacks-rated stocks for high volatility and momentum.
+    Scan stocks with analyst ratings for high volatility and momentum.
 
     Args:
-        zacks_tickers: Dict of {symbol: rank} from Zacks
+        analyst_ratings: Dict of {symbol: rating_data} from Nasdaq API
         min_atr_pct: Minimum ATR%
         min_price: Minimum stock price
         max_price: Maximum stock price
@@ -227,23 +304,14 @@ def scan_portfolio(
     Returns:
         List of qualifying stocks with metrics
     """
-    if not zacks_tickers:
-        print("ERROR: No tickers provided!")
-        print("\nBitte erstelle eine Datei mit Zacks Rank 1-2 Tickers:")
-        print("  1. Gehe zu https://www.zacks.com/stocks/zacks-rank")
-        print("  2. Kopiere die Rank 1 (Strong Buy) Tickers")
-        print("  3. Speichere sie in zacks_input.txt (ein Ticker pro Zeile)")
-        print("\nBeispiel zacks_input.txt:")
-        print("  AAPL,1")
-        print("  NVDA,1")
-        print("  MSFT,2")
-        print("\nDann: python zacks_scanner.py --input zacks_input.txt")
+    if not analyst_ratings:
+        print("No stocks with Strong Buy/Buy ratings found.")
         return []
 
-    symbols = list(zacks_tickers.keys())
+    symbols = list(analyst_ratings.keys())
     total = len(symbols)
 
-    print(f"\nScanning {total} Zacks tickers for ATR% >= {min_atr_pct} and Momentum >= {min_momentum}%...")
+    print(f"\nDownloading price data for {total} Strong Buy/Buy stocks from IB...")
     print("-" * 60)
 
     results = []
@@ -252,7 +320,7 @@ def scan_portfolio(
         print(f"\r[{i}/{total}] Downloading {symbol}...", end='', flush=True)
 
         try:
-            # Download historical data
+            # Download historical data from IB
             df = download_history(symbol, days=180)
 
             if df is None or len(df) < 20:
@@ -277,35 +345,40 @@ def scan_portfolio(
             if metrics['momentum_3m'] < min_momentum:
                 continue
 
-            # Get Zacks rank from input
-            rank = zacks_tickers.get(symbol, 3)
-            rank_labels = {1: 'Strong Buy', 2: 'Buy', 3: 'Hold', 4: 'Sell', 5: 'Strong Sell'}
-            rank_label = rank_labels.get(rank, 'Unknown')
+            # Get analyst rating data
+            rating = analyst_ratings[symbol]
+
+            # Calculate upside to target
+            target = rating.get('target_price', price)
+            upside = ((target / price) - 1) * 100 if price > 0 and target > 0 else 0
 
             # Calculate score
-            # Higher rank (Strong Buy) + higher volatility + positive momentum
-            rank_score = max(0, 4 - rank)  # 3 for Strong Buy, 2 for Buy, etc.
-            vol_score = min(metrics['atr_pct'], 8) / 8  # Normalize 0-1
+            rank_score = max(0, 4 - rating['rank'])  # 3 for Strong Buy, 2 for Buy
+            vol_score = min(metrics['atr_pct'], 8) / 8
             mom_score = 1 + (metrics['momentum_3m'] / 100)
+            upside_score = 1 + (upside / 100) if upside > 0 else 0.5
 
-            combined_score = rank_score * vol_score * mom_score * 10
+            combined_score = rank_score * vol_score * mom_score * upside_score * 10
 
             results.append({
                 'symbol': symbol,
                 'price': price,
-                'rank': rank,
-                'rank_label': rank_label,
+                'rank': rating['rank'],
+                'rank_label': rating['rank_label'],
+                'buy_pct': rating['buy_pct'],
+                'analysts': rating['total'],
+                'target': round(target, 2),
+                'upside_pct': round(upside, 1),
                 'atr_pct': metrics['atr_pct'],
                 'annual_vol': metrics['annual_vol'],
                 'momentum_3m': metrics['momentum_3m'],
-                'momentum_20d': metrics['momentum_20d'],
                 'score': round(combined_score, 2)
             })
 
         except Exception as e:
             continue
 
-    print(f"\n\nFound {len(results)} stocks matching criteria")
+    print(f"\n\nFound {len(results)} stocks matching all criteria")
 
     # Sort by score
     results.sort(key=lambda x: x['score'], reverse=True)
@@ -313,11 +386,11 @@ def scan_portfolio(
     return results[:top_n]
 
 
-def save_results(results: List[dict], filename: str = 'zacks_tickers.json'):
+def save_results(results: List[dict], filename: str = 'analyst_tickers.json'):
     """Save results to JSON file."""
     output = {
         'scan_date': datetime.now().strftime('%Y-%m-%d %H:%M'),
-        'criteria': 'Zacks Rank 1-2 + High Volatility + Positive Momentum',
+        'criteria': 'Analyst Strong Buy/Buy + High Volatility + Positive Momentum',
         'count': len(results),
         'tickers': [r['symbol'] for r in results],
         'details': results
@@ -335,49 +408,71 @@ def print_results(results: List[dict]):
         print("No stocks found matching criteria.")
         return
 
-    print("\n" + "=" * 95)
-    print(f"{'Symbol':<7} {'Price':>8} {'Rank':>12} {'ATR%':>7} {'Vol%':>7} {'Mom3M':>8} {'Mom20D':>8} {'Score':>7}")
-    print("=" * 95)
+    print("\n" + "=" * 115)
+    print(f"{'Symbol':<7} {'Price':>8} {'Rank':>12} {'Buy%':>6} {'#Anlst':>7} {'Target':>8} {'Upside':>8} {'ATR%':>6} {'Mom%':>7} {'Score':>7}")
+    print("=" * 115)
 
     for r in results:
-        print(f"{r['symbol']:<7} ${r['price']:>7.2f} {r['rank_label']:>12} {r['atr_pct']:>6.2f}% {r['annual_vol']:>6.1f}% {r['momentum_3m']:>7.1f}% {r['momentum_20d']:>7.1f}% {r['score']:>7.1f}")
+        print(f"{r['symbol']:<7} ${r['price']:>7.2f} {r['rank_label']:>12} {r['buy_pct']:>5.1f}% {r['analysts']:>7} ${r['target']:>7.2f} {r['upside_pct']:>7.1f}% {r['atr_pct']:>5.2f}% {r['momentum_3m']:>6.1f}% {r['score']:>7.1f}")
 
-    print("=" * 95)
-    print(f"\nRank: 1=Strong Buy, 2=Buy | Score = Rank + ATR% + Momentum")
+    print("=" * 115)
+    print(f"\nRank: Strong Buy (80%+ Buy) | Buy (60-80%) | Score = Rank + Volatility + Momentum + Upside")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Zacks Portfolio Scanner (IB)',
+        description='Analyst Rating Portfolio Scanner',
         epilog='''
+Scannt NASDAQ-100 und Growth-Aktien via Nasdaq API fuer Analysten-Ratings.
+Filtert nach Strong Buy/Buy und kombiniert mit Volatilitaet + Momentum.
+
 Beispiel:
-  1. Erstelle zacks_input.txt mit Zacks Rank 1-2 Tickers von https://www.zacks.com/stocks/zacks-rank
-  2. python zacks_scanner.py --input zacks_input.txt --top 30
-  3. python new5.py --long-short --tickers zacks_tickers.json
+  python zacks_scanner.py --top 30 --min-atr 2.5
+  python new5.py --long-short --tickers analyst_tickers.json
         '''
     )
-    parser.add_argument('--input', type=str, required=True, help='Input file with Zacks tickers (TXT or JSON)')
+    parser.add_argument('--symbols', type=str, help='Optional: File with symbols to scan (one per line)')
+    parser.add_argument('--max-rank', type=int, default=2, help='Max rank (1=Strong Buy, 2=Buy)')
+    parser.add_argument('--min-analysts', type=int, default=10, help='Minimum analyst coverage')
     parser.add_argument('--min-atr', type=float, default=2.0, help='Minimum ATR%%')
     parser.add_argument('--min-price', type=float, default=10.0, help='Minimum stock price')
     parser.add_argument('--max-price', type=float, default=500.0, help='Maximum stock price')
     parser.add_argument('--top', type=int, default=30, help='Number of top stocks to return')
     parser.add_argument('--min-momentum', type=float, default=-10.0, help='Minimum 3-month momentum %%')
-    parser.add_argument('--output', type=str, default='zacks_tickers.json', help='Output filename')
+    parser.add_argument('--output', type=str, default='analyst_tickers.json', help='Output filename')
     parser.add_argument('--port', type=int, default=7497, help='TWS port (7497=Paper, 7496=Live)')
+    parser.add_argument('--include-growth', action='store_true', help='Include high-volatility growth stocks')
 
     args = parser.parse_args()
 
-    # Load Zacks tickers from input file
-    zacks_tickers = load_zacks_tickers(args.input)
+    # Get symbols to scan
+    if args.symbols:
+        symbols = load_symbols_from_file(args.symbols)
+    else:
+        symbols = NASDAQ_100.copy()
+        if args.include_growth:
+            symbols.extend([s for s in GROWTH_STOCKS if s not in symbols])
+        print(f"Scanning {'NASDAQ-100 + Growth' if args.include_growth else 'NASDAQ-100'}: {len(symbols)} symbols")
 
-    if not zacks_tickers:
-        print("\nKeine Tickers geladen. Bitte Eingabedatei pruefen.")
+    if not symbols:
+        print("Keine Symbole zum Scannen.")
         return
 
     try:
-        # Run scan
+        # Step 1: Get analyst ratings from Nasdaq API (no TWS needed)
+        analyst_ratings = scan_nasdaq_ratings(
+            symbols=symbols,
+            max_rank=args.max_rank,
+            min_analysts=args.min_analysts
+        )
+
+        if not analyst_ratings:
+            print("\nKeine Aktien mit Strong Buy/Buy Rating gefunden.")
+            return
+
+        # Step 2: Get price data from IB and filter by volatility/momentum
         results = scan_portfolio(
-            zacks_tickers=zacks_tickers,
+            analyst_ratings=analyst_ratings,
             min_atr_pct=args.min_atr,
             min_price=args.min_price,
             max_price=args.max_price,
@@ -392,7 +487,7 @@ Beispiel:
             save_results(results, args.output)
 
             # Print usage hint
-            print(f"\nNachste Schritte:")
+            print(f"\nNaechste Schritte:")
             print(f"  1. python new5.py --long-short --tickers {args.output}")
             print(f"  2. python portfolio_simulation.py 90 --take-profit 0.30 --min-return 0.25")
 
