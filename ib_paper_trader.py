@@ -799,7 +799,7 @@ class IBPaperTrader:
                     price = close[-1]
                     expected_return = assign_data.get('return', 0)
                     candidates.append((symbol, strategy, price, expected_return))
-                    logger.info(f"    → BULLISH! Added to candidates")
+                    logger.info(f"    -> BULLISH! Added to candidates")
 
             except Exception as e:
                 logger.debug(f"Error checking {symbol}: {e}")
