@@ -831,30 +831,16 @@ class IBPaperTrader:
         bh_symbols = []  # Track B&H symbols to exclude from Strategy
         if current_bh < BH_POSITIONS:
             bh_candidates = self.get_best_bh_candidates()
-            for symbol, ret, price in bh_candidates:
+            for symbol, ret, _ in bh_candidates:
                 bh_symbols.append(symbol)  # Track for exclusion
                 if symbol in self.positions:
                     continue
                 if len(self.positions) >= MAX_POSITIONS:
                     break
 
-                qty = self.calculate_quantity(price)
-                logger.info(f"Opening B&H position: {symbol}")
-                self.place_order(symbol, 'BUY', qty)
-
-                # Track as B&H in our state
-                if not self.dry_run:
-                    self.positions[symbol] = PositionInfo(
-                        symbol=symbol,
-                        direction='LONG',
-                        quantity=qty,
-                        avg_cost=price,
-                        highest_price=price,
-                        lowest_price=0,
-                        strategy='BUYHOLD',
-                        entry_date=datetime.now().strftime('%Y-%m-%d %H:%M')
-                    )
-
+                # Place order (qty=0 means auto-calculate from current price)
+                logger.info(f"Opening B&H position: {symbol} (exp: {ret*100:.0f}%)")
+                self.place_order(symbol, 'BUY', 0)
                 self.ib.sleep(0.5)  # Avoid rate limits
 
         # 2. Open Strategy positions (excluding B&H symbols!)
@@ -866,23 +852,10 @@ class IBPaperTrader:
                 if len(self.positions) >= MAX_POSITIONS:
                     break
 
+                # Use price from strategy check for quantity calculation
                 qty = self.calculate_quantity(price)
                 logger.info(f"Opening Strategy position: {symbol} ({strategy})")
                 self.place_order(symbol, 'BUY', qty)
-
-                # Track as Strategy in our state
-                if not self.dry_run:
-                    self.positions[symbol] = PositionInfo(
-                        symbol=symbol,
-                        direction='LONG',
-                        quantity=qty,
-                        avg_cost=price,
-                        highest_price=price,
-                        lowest_price=0,
-                        strategy=strategy,
-                        entry_date=datetime.now().strftime('%Y-%m-%d %H:%M')
-                    )
-
                 self.ib.sleep(0.5)  # Avoid rate limits
 
         logger.info(f"Total positions after opening: {len(self.positions)}")
@@ -907,6 +880,11 @@ class IBPaperTrader:
             if price <= 0:
                 logger.error(f"No price available for {symbol}")
                 return None
+
+            # Auto-calculate quantity if not provided (qty=0)
+            if quantity == 0:
+                quantity = self.calculate_quantity(price)
+                logger.info(f"  Auto-calculated quantity: {quantity} shares @ ${price:.2f}")
 
             # Use limit order slightly away from current price
             if action in ['BUY', 'COVER']:
