@@ -886,11 +886,11 @@ class IBPaperTrader:
                 quantity = self.calculate_quantity(price)
                 logger.info(f"  Auto-calculated quantity: {quantity} shares @ ${price:.2f}")
 
-            # Use limit order slightly away from current price
+            # Use limit order with 0.5% offset for better fill rates
             if action in ['BUY', 'COVER']:
-                limit_price = round(price * 1.001, 2)  # 0.1% above
+                limit_price = round(price * 1.005, 2)  # 0.5% above
             else:  # SELL, SHORT
-                limit_price = round(price * 0.999, 2)  # 0.1% below
+                limit_price = round(price * 0.995, 2)  # 0.5% below
 
             # Calculate fee and order value
             fee = self.calculate_entry_fee(quantity, limit_price) if action in ['BUY', 'SHORT'] else self.calculate_exit_fee(quantity, limit_price)
@@ -936,6 +936,33 @@ class IBPaperTrader:
         except Exception as e:
             logger.error(f"Error placing order: {e}")
             return None
+
+    def cancel_all_orders(self):
+        """Cancel all open orders in TWS"""
+        try:
+            open_orders = self.ib.openOrders()
+            if not open_orders:
+                logger.info("No open orders to cancel")
+                return 0
+
+            logger.info(f"Cancelling {len(open_orders)} open orders...")
+            cancelled = 0
+
+            for order in open_orders:
+                try:
+                    self.ib.cancelOrder(order)
+                    logger.info(f"  Cancelled: {order.orderId} - {order.action} {order.totalQuantity}")
+                    cancelled += 1
+                except Exception as e:
+                    logger.error(f"  Failed to cancel {order.orderId}: {e}")
+
+            self.ib.sleep(1)  # Wait for cancellations to process
+            logger.info(f"Cancelled {cancelled} orders")
+            return cancelled
+
+        except Exception as e:
+            logger.error(f"Error cancelling orders: {e}")
+            return 0
 
     def check_market_hours(self) -> bool:
         """Check if market is open"""
@@ -1552,6 +1579,7 @@ def main():
     parser.add_argument('--dashboard', action='store_true', help='Generate dashboard only (no IB connection)')
     parser.add_argument('--sync', action='store_true', help='Sync positions with IB and generate dashboard')
     parser.add_argument('--long-only', action='store_true', help='Only trade LONG positions')
+    parser.add_argument('--cancel-all', action='store_true', help='Cancel all open orders')
     parser.add_argument('--port', type=int, default=7497, help='TWS port (default: 7497)')
     args = parser.parse_args()
 
@@ -1562,7 +1590,17 @@ def main():
         logger.info("DRY-RUN MODE - Orders werden NICHT gesendet!")
         logger.info("=" * 60)
 
-    if args.dashboard:
+    if args.cancel_all:
+        # Cancel all open orders
+        if trader.connect():
+            try:
+                cancelled = trader.cancel_all_orders()
+                print(f"Cancelled {cancelled} orders")
+            finally:
+                trader.disconnect()
+        else:
+            print("Failed to connect to IB")
+    elif args.dashboard:
         # Just generate dashboard from saved state (no IB connection)
         trader.generate_dashboard()
         print(f"Dashboard generated: {DASHBOARD_FILE}")

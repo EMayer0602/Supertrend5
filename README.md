@@ -187,6 +187,7 @@ python ib_paper_trader.py [options]
 | `--dashboard` | Generate dashboard only (no IB connection) |
 | `--sync` | Sync positions with IB and generate dashboard |
 | `--long-only` | Only trade LONG positions |
+| `--cancel-all` | **Cancel all open orders** |
 | `--port PORT` | TWS port (default: 7497) |
 
 ### Usage Examples
@@ -197,6 +198,9 @@ python ib_paper_trader.py --long-only --dry-run
 
 # Live trading with TWS (override market hours)
 python ib_paper_trader.py --long-only --force
+
+# Cancel all open orders
+python ib_paper_trader.py --cancel-all
 
 # Sync positions and generate dashboard
 python ib_paper_trader.py --sync
