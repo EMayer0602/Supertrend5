@@ -681,8 +681,9 @@ class IBPaperTrader:
 
         for i, symbol in enumerate(ALL_TICKERS, 1):
             try:
-                # Show progress
-                print(f"\r  [{i}/{total}] {'Downloading' if symbol not in self.price_data else 'Checking'} {symbol}...          ", end='', flush=True)
+                # Show progress every symbol
+                action = 'Downloading' if symbol not in self.price_data else 'Checking'
+                logger.info(f"  [{i}/{total}] {action} {symbol}...")
 
                 if symbol not in self.price_data:
                     df = self.download_price_data(symbol, BH_LOOKBACK_DAYS + 10)
@@ -710,9 +711,6 @@ class IBPaperTrader:
             except Exception as e:
                 logger.debug(f"Error checking {symbol}: {e}")
 
-        # Clear progress line
-        print("\r" + " " * 60 + "\r", end='', flush=True)
-
         # Sort by return descending and return top 10
         candidates.sort(key=lambda x: x[1], reverse=True)
         top_candidates = candidates[:BH_POSITIONS]
@@ -737,8 +735,9 @@ class IBPaperTrader:
         # Check all symbols with LONG assignments
         for i, symbol in enumerate(symbols, 1):
             try:
-                # Show progress
-                print(f"\r  [{i}/{total}] {'Downloading' if symbol not in self.price_data else 'Checking'} {symbol}...          ", end='', flush=True)
+                # Show progress every symbol
+                action = 'Downloading' if symbol not in self.price_data else 'Checking'
+                logger.info(f"  [{i}/{total}] {action} {symbol}...")
 
                 signal = self.generate_signal(symbol)
 
@@ -809,9 +808,6 @@ class IBPaperTrader:
 
             except Exception as e:
                 logger.debug(f"Error checking {symbol}: {e}")
-
-        # Clear progress line
-        print("\r" + " " * 60 + "\r", end='', flush=True)
 
         # Sort by expected return and limit to STRATEGY_POSITIONS
         candidates.sort(key=lambda x: x[3], reverse=True)
