@@ -381,6 +381,37 @@ def get_htf_trend(daily_df: pd.DataFrame, symbol: str, period: int, multiplier: 
     return daily_htf
 
 
+def get_htf_ma(daily_df: pd.DataFrame, symbol: str, ma_func, period: int) -> np.ndarray:
+    """
+    Calculate HTF (Weekly) MA and map back to daily timeframe.
+    Used for MAXMA strategy: HTF(MA) x MA crossover.
+
+    Args:
+        daily_df: Daily OHLC dataframe
+        symbol: Stock symbol
+        ma_func: MA calculation function (calculate_jma, calculate_ema, etc.)
+        period: MA period
+
+    Returns: numpy array with HTF MA values aligned to daily index
+    """
+    weekly_df = resample_to_weekly(daily_df, symbol)
+
+    if len(weekly_df) < period + 5:
+        return None
+
+    close_col = f'Close_{symbol}'
+    weekly_close = weekly_df[close_col]
+
+    # Calculate MA on weekly data
+    weekly_ma = ma_func(weekly_close, period)
+
+    # Forward-fill to daily timeframe
+    daily_htf_ma = weekly_ma.reindex(daily_df.index, method='ffill')
+    daily_htf_ma = daily_htf_ma.fillna(method='bfill')
+
+    return daily_htf_ma.values
+
+
 # =============================================================================
 # VECTORIZED TRADING SIGNALS
 # =============================================================================
@@ -2587,6 +2618,47 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
                     long_results[f'{ma_name}{htf_label}'] = {'return': float(best_return), 'params': best_params}
 
         # =================================================================
+        # LONG MAXMA STRATEGIES: HTF(MA) x MA Crossover
+        # Weekly MA crosses Daily MA
+        # =================================================================
+        for ma_name, calc_func, htf_period, daily_periods in [
+            ('JMA', calculate_jma, 10, [7, 10, 14]),
+            ('KAMA', lambda s, p: calculate_kama(s, p), 10, [7, 10, 14]),
+            ('EMA', calculate_ema, 10, [8, 12, 20]),
+            ('SMA', calculate_sma, 10, [10, 20, 30]),
+        ]:
+            best_return = -np.inf
+            best_params = None
+
+            # Get HTF (weekly) MA
+            htf_ma = get_htf_ma(stock_data, symbol, calc_func, htf_period)
+            if htf_ma is None:
+                continue
+
+            for daily_period in daily_periods:
+                try:
+                    daily_ma = calc_func(close_series, daily_period).values
+
+                    # Crossover: Daily MA crosses above HTF MA = Buy
+                    # Daily MA crosses below HTF MA = Sell
+                    buy_signals, sell_signals = get_ma_crossover_signals(daily_ma, htf_ma, htf_ma)
+                    # Actually we want daily_ma crossing htf_ma:
+                    prev_daily = np.roll(daily_ma, 1)
+                    prev_daily[0] = daily_ma[0]
+                    buy_signals = (prev_daily <= htf_ma) & (daily_ma > htf_ma)
+                    sell_signals = (prev_daily >= htf_ma) & (daily_ma < htf_ma)
+
+                    ret = test_strategy_return(stock_data, buy_signals, sell_signals, config, system)
+                    if ret > best_return:
+                        best_return = ret
+                        best_params = {'htf_period': htf_period, 'daily_period': daily_period}
+                except:
+                    pass
+
+            if best_return > -np.inf:
+                long_results[f'{ma_name}_MAXMA'] = {'return': float(best_return), 'params': best_params}
+
+        # =================================================================
         # SHORT STRATEGIES (Short on bearish, Cover on bullish)
         # Different parameters: shorter periods, tighter multipliers
         # =================================================================
@@ -2674,6 +2746,45 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
                 if best_return > -np.inf:
                     short_results[f'{ma_name}{htf_label}'] = {'return': float(best_return), 'params': best_params}
 
+        # =================================================================
+        # SHORT MAXMA STRATEGIES: HTF(MA) x MA Crossover (inverted)
+        # Daily MA crosses below Weekly MA = Short entry
+        # =================================================================
+        for ma_name, calc_func, htf_period, daily_periods in [
+            ('JMA', calculate_jma, 10, [5, 7, 10]),
+            ('KAMA', lambda s, p: calculate_kama(s, p), 10, [5, 7, 10]),
+            ('EMA', calculate_ema, 10, [5, 8, 12]),
+            ('SMA', calculate_sma, 10, [5, 10, 20]),
+        ]:
+            best_return = -np.inf
+            best_params = None
+
+            # Get HTF (weekly) MA
+            htf_ma = get_htf_ma(stock_data, symbol, calc_func, htf_period)
+            if htf_ma is None:
+                continue
+
+            for daily_period in daily_periods:
+                try:
+                    daily_ma = calc_func(close_series, daily_period).values
+
+                    # Crossover: Daily MA crosses below HTF MA = Short entry
+                    # Daily MA crosses above HTF MA = Cover
+                    prev_daily = np.roll(daily_ma, 1)
+                    prev_daily[0] = daily_ma[0]
+                    short_signals = (prev_daily >= htf_ma) & (daily_ma < htf_ma)  # Cross down
+                    cover_signals = (prev_daily <= htf_ma) & (daily_ma > htf_ma)  # Cross up
+
+                    ret = test_short_strategy_return(stock_data, short_signals, cover_signals, config, system)
+                    if ret > best_return:
+                        best_return = ret
+                        best_params = {'htf_period': htf_period, 'daily_period': daily_period}
+                except:
+                    pass
+
+            if best_return > -np.inf:
+                short_results[f'{ma_name}_MAXMA'] = {'return': float(best_return), 'params': best_params}
+
         # Find best LONG strategy
         best_long = None
         best_long_return = -np.inf
@@ -2750,22 +2861,30 @@ def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, e
     print(f"Min PnL: LONG >= {min_pnl:.0%}, SHORT >= {min_pnl:.0%}")
     print("="*80)
 
-    # Separate categories for LONG and SHORT
+    # Separate categories for LONG and SHORT (15 strategies each: 5 MAs × 3 types)
     long_categories = {
-        'SUPERTREND_LONG_HTF': [], 'SUPERTREND_LONG_NOHTF': [],
-        'JMA_LONG_HTF': [], 'JMA_LONG_NOHTF': [],
-        'KAMA_LONG_HTF': [], 'KAMA_LONG_NOHTF': [],
-        'EMA_LONG_HTF': [], 'EMA_LONG_NOHTF': [],
-        'SMA_LONG_HTF': [], 'SMA_LONG_NOHTF': [],
+        # NOHTF: Close × MA crossover
+        'SUPERTREND_LONG_NOHTF': [], 'JMA_LONG_NOHTF': [], 'KAMA_LONG_NOHTF': [],
+        'EMA_LONG_NOHTF': [], 'SMA_LONG_NOHTF': [],
+        # HTF: Close × MA + HTF Filter
+        'SUPERTREND_LONG_HTF': [], 'JMA_LONG_HTF': [], 'KAMA_LONG_HTF': [],
+        'EMA_LONG_HTF': [], 'SMA_LONG_HTF': [],
+        # MAXMA: HTF(MA) × MA crossover
+        'JMA_LONG_MAXMA': [], 'KAMA_LONG_MAXMA': [],
+        'EMA_LONG_MAXMA': [], 'SMA_LONG_MAXMA': [], 'SUPERTREND_LONG_MAXMA': [],
         'BUYHOLD': [], 'UNDERPERFORM_LONG': []
     }
 
     short_categories = {
-        'SUPERTREND_SHORT_HTF': [], 'SUPERTREND_SHORT_NOHTF': [],
-        'JMA_SHORT_HTF': [], 'JMA_SHORT_NOHTF': [],
-        'KAMA_SHORT_HTF': [], 'KAMA_SHORT_NOHTF': [],
-        'EMA_SHORT_HTF': [], 'EMA_SHORT_NOHTF': [],
-        'SMA_SHORT_HTF': [], 'SMA_SHORT_NOHTF': [],
+        # NOHTF: Close × MA crossover
+        'SUPERTREND_SHORT_NOHTF': [], 'JMA_SHORT_NOHTF': [], 'KAMA_SHORT_NOHTF': [],
+        'EMA_SHORT_NOHTF': [], 'SMA_SHORT_NOHTF': [],
+        # HTF: Close × MA + HTF Filter
+        'SUPERTREND_SHORT_HTF': [], 'JMA_SHORT_HTF': [], 'KAMA_SHORT_HTF': [],
+        'EMA_SHORT_HTF': [], 'SMA_SHORT_HTF': [],
+        # MAXMA: HTF(MA) × MA crossover
+        'JMA_SHORT_MAXMA': [], 'KAMA_SHORT_MAXMA': [],
+        'EMA_SHORT_MAXMA': [], 'SMA_SHORT_MAXMA': [], 'SUPERTREND_SHORT_MAXMA': [],
         'SHORTHOLD': [], 'UNDERPERFORM_SHORT': []
     }
 
@@ -2791,9 +2910,16 @@ def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, e
         bh_ret = result.get('buy_hold', 0)
 
         if best_long and long_ret >= min_pnl:
-            base = best_long.replace('_HTF', '')
-            has_htf = '_HTF' in best_long
-            cat_key = f"{base}_LONG_{'HTF' if has_htf else 'NOHTF'}"
+            # Determine strategy type: MAXMA, HTF, or NOHTF
+            if '_MAXMA' in best_long:
+                base = best_long.replace('_MAXMA', '')
+                cat_key = f"{base}_LONG_MAXMA"
+            elif '_HTF' in best_long:
+                base = best_long.replace('_HTF', '')
+                cat_key = f"{base}_LONG_HTF"
+            else:
+                base = best_long
+                cat_key = f"{base}_LONG_NOHTF"
             if cat_key in long_categories:
                 long_categories[cat_key].append({
                     'symbol': symbol, 'return': long_ret, 'params': long_params, 'buy_hold': bh_ret
@@ -2811,9 +2937,16 @@ def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, e
         short_params = result.get('best_short_params', {})
 
         if best_short and short_ret >= min_pnl:
-            base = best_short.replace('_HTF', '')
-            has_htf = '_HTF' in best_short
-            cat_key = f"{base}_SHORT_{'HTF' if has_htf else 'NOHTF'}"
+            # Determine strategy type: MAXMA, HTF, or NOHTF
+            if '_MAXMA' in best_short:
+                base = best_short.replace('_MAXMA', '')
+                cat_key = f"{base}_SHORT_MAXMA"
+            elif '_HTF' in best_short:
+                base = best_short.replace('_HTF', '')
+                cat_key = f"{base}_SHORT_HTF"
+            else:
+                base = best_short
+                cat_key = f"{base}_SHORT_NOHTF"
             if cat_key in short_categories:
                 short_categories[cat_key].append({
                     'symbol': symbol, 'return': short_ret, 'params': short_params
