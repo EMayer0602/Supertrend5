@@ -872,11 +872,25 @@ class IBPaperTrader:
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
 
-            # Get current price for limit order
+            # Get current price and bid/ask for limit order
             ticker = self.ib.reqMktData(contract, '', False, False)
             self.ib.sleep(1)
 
-            price = ticker.last if ticker.last > 0 else ticker.close
+            # Get bid/ask for midpoint calculation
+            bid = ticker.bid if ticker.bid > 0 else 0
+            ask = ticker.ask if ticker.ask > 0 else 0
+            last = ticker.last if ticker.last > 0 else ticker.close
+
+            # Use midpoint if bid/ask available, otherwise use last price
+            if bid > 0 and ask > 0:
+                mid_price = (bid + ask) / 2
+                price = last if last > 0 else mid_price
+                logger.info(f"  {symbol}: Bid=${bid:.2f} Ask=${ask:.2f} Mid=${mid_price:.2f}")
+            else:
+                mid_price = last
+                price = last
+                logger.info(f"  {symbol}: Last=${last:.2f} (no bid/ask)")
+
             if price <= 0:
                 logger.error(f"No price available for {symbol}")
                 return None
@@ -886,11 +900,13 @@ class IBPaperTrader:
                 quantity = self.calculate_quantity(price)
                 logger.info(f"  Auto-calculated quantity: {quantity} shares @ ${price:.2f}")
 
-            # Use limit order with 0.5% offset for better fill rates
-            if action in ['BUY', 'COVER']:
-                limit_price = round(price * 1.005, 2)  # 0.5% above
+            # Use midpoint between bid/ask for limit price (better fills)
+            if bid > 0 and ask > 0:
+                limit_price = round(mid_price, 2)  # Midpoint
+            elif action in ['BUY', 'COVER']:
+                limit_price = round(price * 1.005, 2)  # Fallback: 0.5% above
             else:  # SELL, SHORT
-                limit_price = round(price * 0.995, 2)  # 0.5% below
+                limit_price = round(price * 0.995, 2)  # Fallback: 0.5% below
 
             # Calculate fee and order value
             fee = self.calculate_entry_fee(quantity, limit_price) if action in ['BUY', 'SHORT'] else self.calculate_exit_fee(quantity, limit_price)
