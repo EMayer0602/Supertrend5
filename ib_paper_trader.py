@@ -52,8 +52,12 @@ DASHBOARD_FILE = "ib_dashboard.html"
 # Trading parameters
 INITIAL_CAPITAL = 20000  # Starting capital
 MAX_POSITIONS = 30
+BH_POSITIONS = 10  # Buy & Hold positions
+STRATEGY_POSITIONS = 20  # Strategy positions
 TRAILING_STOP_PCT = 0.20  # 20% trailing stop
-FEE_RATE = 0.0001  # 0.01% fee (TWS typical) - wird von TWS überschrieben wenn verfügbar
+FEE_RATE = 0.0001  # 0.01% fee (TWS typical)
+BH_LOOKBACK_DAYS = 30  # Days to look back for B&H selection
+REBALANCE_DAYS = 5  # Days between B&H rebalancing
 
 # IB connection
 IB_HOST = "127.0.0.1"
@@ -664,6 +668,219 @@ class IBPaperTrader:
         """Calculate exit fee: quantity * price * fee_rate"""
         return quantity * price * FEE_RATE
 
+    def get_best_bh_candidates(self) -> List[Tuple[str, float]]:
+        """
+        Find best 10 Buy & Hold candidates based on recent performance.
+        Returns list of (symbol, return, price) sorted by return descending.
+        """
+        from new5 import ALL_TICKERS
+
+        candidates = []
+        logger.info(f"Scanning {len(ALL_TICKERS)} symbols for B&H candidates...")
+
+        for symbol in ALL_TICKERS:
+            try:
+                if symbol not in self.price_data:
+                    df = self.download_price_data(symbol, BH_LOOKBACK_DAYS + 10)
+                    if df is not None:
+                        self.price_data[symbol] = df
+
+                if symbol not in self.price_data:
+                    continue
+
+                df = self.price_data[symbol]
+                close_col = f'Close_{symbol}'
+
+                if close_col not in df.columns or len(df) < BH_LOOKBACK_DAYS:
+                    continue
+
+                # Calculate return over lookback period
+                recent = df.tail(BH_LOOKBACK_DAYS)
+                start_price = recent[close_col].iloc[0]
+                end_price = recent[close_col].iloc[-1]
+
+                if start_price > 0:
+                    ret = (end_price - start_price) / start_price
+                    candidates.append((symbol, ret, end_price))
+
+            except Exception as e:
+                logger.debug(f"Error checking {symbol}: {e}")
+
+        # Sort by return descending and return top 10
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        top_candidates = candidates[:BH_POSITIONS]
+
+        logger.info(f"Top {BH_POSITIONS} B&H candidates:")
+        for sym, ret, price in top_candidates:
+            logger.info(f"  {sym}: {ret*100:+.1f}% @ ${price:.2f}")
+
+        return top_candidates
+
+    def get_strategy_candidates(self) -> List[Tuple[str, str, float]]:
+        """
+        Find strategy positions with current BUY signals.
+        Returns list of (symbol, strategy, price) for symbols with active BUY signal.
+        """
+        candidates = []
+
+        # Check all symbols with LONG assignments
+        for symbol in self.long_assignments:
+            try:
+                signal = self.generate_signal(symbol)
+
+                # We want symbols where the strategy is bullish (not just crossover today)
+                # Check if the current trend is bullish
+                if symbol not in self.price_data:
+                    df = self.download_price_data(symbol, 100)
+                    if df is not None:
+                        self.price_data[symbol] = df
+
+                if symbol not in self.price_data:
+                    continue
+
+                df = self.price_data[symbol]
+                close_col = f'Close_{symbol}'
+                high_col = f'High_{symbol}'
+                low_col = f'Low_{symbol}'
+
+                if close_col not in df.columns:
+                    continue
+
+                close = df[close_col].values
+                high = df[high_col].values
+                low = df[low_col].values
+
+                # Get strategy params
+                long_assign = self.long_assignments.get(symbol, {})
+                strategy = long_assign.get('strategy', 'SUPERTREND')
+                params = long_assign.get('params', {})
+                base = strategy.replace('_HTF', '').replace('_NOHTF', '')
+
+                # Check if currently in bullish trend (not just crossover)
+                is_bullish = False
+
+                if base == 'SUPERTREND':
+                    period = params.get('period', 10)
+                    mult = params.get('multiplier', 3.0)
+                    _, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
+                    if len(direction) > 0 and direction[-1] == 1:
+                        is_bullish = True
+                elif base in ['JMA', 'KAMA', 'EMA', 'SMA']:
+                    close_series = df[close_col]
+                    fast = params.get('fast', 10)
+                    slow = params.get('slow', 30)
+
+                    if base == 'JMA':
+                        ma_fast = calculate_jma(close_series, fast).values
+                        ma_slow = calculate_jma(close_series, slow).values
+                    elif base == 'KAMA':
+                        period = params.get('period', 10)
+                        sig = params.get('signal', 14)
+                        ma_fast = calculate_kama(close_series, period).values
+                        ma_slow = calculate_sma(close_series, sig).values
+                    elif base == 'EMA':
+                        ma_fast = calculate_ema(close_series, fast).values
+                        ma_slow = calculate_ema(close_series, slow).values
+                    else:
+                        ma_fast = calculate_sma(close_series, fast).values
+                        ma_slow = calculate_sma(close_series, slow).values
+
+                    if len(ma_fast) > 0 and len(ma_slow) > 0 and ma_fast[-1] > ma_slow[-1]:
+                        is_bullish = True
+
+                if is_bullish:
+                    price = close[-1]
+                    expected_return = long_assign.get('return', 0)
+                    candidates.append((symbol, strategy, price, expected_return))
+
+            except Exception as e:
+                logger.debug(f"Error checking {symbol}: {e}")
+
+        # Sort by expected return and limit to STRATEGY_POSITIONS
+        candidates.sort(key=lambda x: x[3], reverse=True)
+        top_candidates = candidates[:STRATEGY_POSITIONS]
+
+        logger.info(f"Found {len(top_candidates)} strategy candidates with bullish signals:")
+        for sym, strat, price, ret in top_candidates[:10]:  # Show top 10
+            logger.info(f"  {sym}: {strat} @ ${price:.2f} (expected: {ret*100:.1f}%)")
+
+        return [(sym, strat, price) for sym, strat, price, _ in top_candidates]
+
+    def open_initial_positions(self):
+        """
+        Open initial positions:
+        - 10 Buy & Hold (top performers)
+        - 20 Strategy (bullish signals)
+        """
+        logger.info("=" * 60)
+        logger.info("OPENING INITIAL POSITIONS")
+        logger.info(f"Target: {BH_POSITIONS} B&H + {STRATEGY_POSITIONS} Strategy = {MAX_POSITIONS} total")
+        logger.info("=" * 60)
+
+        # Count current positions by type
+        current_bh = len([p for p in self.positions.values() if p.strategy == 'BUYHOLD'])
+        current_strat = len([p for p in self.positions.values() if p.strategy != 'BUYHOLD'])
+
+        logger.info(f"Current positions: {current_bh} B&H + {current_strat} Strategy")
+
+        # 1. Open B&H positions
+        if current_bh < BH_POSITIONS:
+            bh_candidates = self.get_best_bh_candidates()
+            for symbol, ret, price in bh_candidates:
+                if symbol in self.positions:
+                    continue
+                if len(self.positions) >= MAX_POSITIONS:
+                    break
+
+                qty = self.calculate_quantity(price)
+                logger.info(f"Opening B&H position: {symbol}")
+                self.place_order(symbol, 'BUY', qty)
+
+                # Track as B&H in our state
+                if not self.dry_run:
+                    self.positions[symbol] = PositionInfo(
+                        symbol=symbol,
+                        direction='LONG',
+                        quantity=qty,
+                        avg_cost=price,
+                        highest_price=price,
+                        lowest_price=0,
+                        strategy='BUYHOLD',
+                        entry_date=datetime.now().strftime('%Y-%m-%d %H:%M')
+                    )
+
+                self.ib.sleep(0.5)  # Avoid rate limits
+
+        # 2. Open Strategy positions
+        if current_strat < STRATEGY_POSITIONS:
+            strat_candidates = self.get_strategy_candidates()
+            for symbol, strategy, price in strat_candidates:
+                if symbol in self.positions:
+                    continue
+                if len(self.positions) >= MAX_POSITIONS:
+                    break
+
+                qty = self.calculate_quantity(price)
+                logger.info(f"Opening Strategy position: {symbol} ({strategy})")
+                self.place_order(symbol, 'BUY', qty)
+
+                # Track as Strategy in our state
+                if not self.dry_run:
+                    self.positions[symbol] = PositionInfo(
+                        symbol=symbol,
+                        direction='LONG',
+                        quantity=qty,
+                        avg_cost=price,
+                        highest_price=price,
+                        lowest_price=0,
+                        strategy=strategy,
+                        entry_date=datetime.now().strftime('%Y-%m-%d %H:%M')
+                    )
+
+                self.ib.sleep(0.5)  # Avoid rate limits
+
+        logger.info(f"Total positions after opening: {len(self.positions)}")
+
     def place_order(self, symbol: str, action: str, quantity: int) -> Optional[int]:
         """
         Place an order with IB (or simulate in dry-run mode)
@@ -777,11 +994,19 @@ class IBPaperTrader:
                 return
 
         try:
-            # Sync positions
+            # Sync positions from IB
             self.sync_positions()
 
             # Check market data
             self.check_data_subscription()
+
+            # Open initial positions if we have less than target
+            if len(self.positions) < MAX_POSITIONS:
+                logger.info(f"Current positions: {len(self.positions)} < target {MAX_POSITIONS}")
+                self.open_initial_positions()
+
+            # Save state after initial opening
+            self.save_state()
 
             # Subscribe to PnL
             accounts = self.ib.managedAccounts()
