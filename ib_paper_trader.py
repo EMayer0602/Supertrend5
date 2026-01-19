@@ -668,82 +668,67 @@ class IBPaperTrader:
         """Calculate exit fee: quantity * price * fee_rate"""
         return quantity * price * FEE_RATE
 
-    def get_best_bh_candidates(self) -> List[Tuple[str, float]]:
+    def get_best_bh_candidates(self) -> List[Tuple[str, float, float]]:
         """
         Find best 10 Buy & Hold candidates from pre-filtered symbols.
-        Only uses symbols from long_short_categorized.json (already >= 15% PnL).
-        Returns list of (symbol, return, price) sorted by return descending.
+        Uses the STORED returns from long_short_categorized.json (already >= 15% PnL).
+        NO DOWNLOAD NEEDED - returns are pre-calculated from optimization!
+
+        Returns list of (symbol, return, price=0) sorted by return descending.
+        Price will be fetched when placing the order.
         """
-        # Use only pre-filtered symbols from categorization (not ALL_TICKERS)
-        symbols = list(self.long_assignments.keys())
-        candidates = []
-        total = len(symbols)
-        logger.info(f"Scanning {total} pre-filtered symbols for B&H candidates...")
+        # Sort by stored return from optimization (NO DOWNLOAD!)
+        candidates = [
+            (symbol, data['return'], 0.0)  # price=0, will be fetched at order time
+            for symbol, data in self.long_assignments.items()
+            if data.get('return', 0) >= 0.15  # Only >= 15% PnL
+        ]
 
-        for i, symbol in enumerate(symbols, 1):
-            try:
-                # Show progress every symbol
-                action = 'Downloading' if symbol not in self.price_data else 'Checking'
-                logger.info(f"  [{i}/{total}] {action} {symbol}...")
-
-                if symbol not in self.price_data:
-                    df = self.download_price_data(symbol, BH_LOOKBACK_DAYS + 10)
-                    if df is not None:
-                        self.price_data[symbol] = df
-
-                if symbol not in self.price_data:
-                    continue
-
-                df = self.price_data[symbol]
-                close_col = f'Close_{symbol}'
-
-                if close_col not in df.columns or len(df) < BH_LOOKBACK_DAYS:
-                    continue
-
-                # Calculate return over lookback period
-                recent = df.tail(BH_LOOKBACK_DAYS)
-                start_price = recent[close_col].iloc[0]
-                end_price = recent[close_col].iloc[-1]
-
-                if start_price > 0:
-                    ret = (end_price - start_price) / start_price
-                    candidates.append((symbol, ret, end_price))
-
-            except Exception as e:
-                logger.debug(f"Error checking {symbol}: {e}")
-
-        # Sort by return descending and return top 10
+        # Sort by return descending
         candidates.sort(key=lambda x: x[1], reverse=True)
         top_candidates = candidates[:BH_POSITIONS]
 
-        logger.info(f"Top {BH_POSITIONS} B&H candidates:")
-        for sym, ret, price in top_candidates:
-            logger.info(f"  {sym}: {ret*100:+.1f}% @ ${price:.2f}")
+        logger.info(f"Top {BH_POSITIONS} B&H candidates (from optimization results):")
+        for sym, ret, _ in top_candidates:
+            strategy = self.long_assignments[sym].get('strategy', '')
+            logger.info(f"  {sym}: {ret*100:+.1f}% ({strategy})")
 
         return top_candidates
 
     def get_strategy_candidates(self) -> List[Tuple[str, str, float]]:
         """
         Find strategy positions with current BUY signals.
+        OPTIMIZED: Sorts by stored return first, then checks trend until we have enough.
         Returns list of (symbol, strategy, price) for symbols with active BUY signal.
         """
+        # Pre-sort by stored return (highest first) - check best performers first!
+        sorted_symbols = sorted(
+            [(sym, data) for sym, data in self.long_assignments.items()
+             if data.get('return', 0) >= 0.15],  # Only >= 15% PnL
+            key=lambda x: x[1].get('return', 0),
+            reverse=True
+        )
+
         candidates = []
-        symbols = list(self.long_assignments.keys())
-        total = len(symbols)
+        total = len(sorted_symbols)
+        checked = 0
 
-        logger.info(f"Scanning {total} symbols for strategy signals...")
+        logger.info(f"Checking {total} symbols for bullish trends (sorted by expected return)...")
 
-        # Check all symbols with LONG assignments
-        for i, symbol in enumerate(symbols, 1):
+        # Check symbols in order of expected return until we have enough
+        for symbol, assign_data in sorted_symbols:
+            # Stop early if we have enough candidates
+            if len(candidates) >= STRATEGY_POSITIONS:
+                logger.info(f"Found {STRATEGY_POSITIONS} candidates, stopping early (checked {checked}/{total})")
+                break
+
+            checked += 1
             try:
-                # Show progress every symbol
+                # Show progress
                 action = 'Downloading' if symbol not in self.price_data else 'Checking'
-                logger.info(f"  [{i}/{total}] {action} {symbol}...")
+                logger.info(f"  [{checked}/{total}] {action} {symbol} (exp: {assign_data.get('return', 0)*100:.0f}%)...")
 
-                signal = self.generate_signal(symbol)
-
-                # We want symbols where the strategy is bullish (not just crossover today)
-                # Check if the current trend is bullish
+                # Download if needed
                 if symbol not in self.price_data:
                     df = self.download_price_data(symbol, 100)
                     if df is not None:
@@ -765,12 +750,11 @@ class IBPaperTrader:
                 low = df[low_col].values
 
                 # Get strategy params
-                long_assign = self.long_assignments.get(symbol, {})
-                strategy = long_assign.get('strategy', 'SUPERTREND')
-                params = long_assign.get('params', {})
+                strategy = assign_data.get('strategy', 'SUPERTREND')
+                params = assign_data.get('params', {})
                 base = strategy.replace('_HTF', '').replace('_NOHTF', '')
 
-                # Check if currently in bullish trend (not just crossover)
+                # Check if currently in bullish trend
                 is_bullish = False
 
                 if base == 'SUPERTREND':
@@ -804,21 +788,18 @@ class IBPaperTrader:
 
                 if is_bullish:
                     price = close[-1]
-                    expected_return = long_assign.get('return', 0)
+                    expected_return = assign_data.get('return', 0)
                     candidates.append((symbol, strategy, price, expected_return))
+                    logger.info(f"    → BULLISH! Added to candidates")
 
             except Exception as e:
                 logger.debug(f"Error checking {symbol}: {e}")
 
-        # Sort by expected return and limit to STRATEGY_POSITIONS
-        candidates.sort(key=lambda x: x[3], reverse=True)
-        top_candidates = candidates[:STRATEGY_POSITIONS]
-
-        logger.info(f"Found {len(top_candidates)} strategy candidates with bullish signals:")
-        for sym, strat, price, ret in top_candidates[:10]:  # Show top 10
+        logger.info(f"Found {len(candidates)} strategy candidates with bullish signals:")
+        for sym, strat, price, ret in candidates[:10]:
             logger.info(f"  {sym}: {strat} @ ${price:.2f} (expected: {ret*100:.1f}%)")
 
-        return [(sym, strat, price) for sym, strat, price, _ in top_candidates]
+        return [(sym, strat, price) for sym, strat, price, _ in candidates]
 
     def open_initial_positions(self):
         """
