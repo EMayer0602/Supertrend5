@@ -416,22 +416,54 @@ class IBPaperTrader:
         """Synchronize positions with IB account"""
         logger.info("Synchronizing positions...")
 
-        # Request positions
-        self.ib.reqPositions()
-        self.ib.sleep(2)
+        try:
+            # Get positions directly (simpler than reqPositions)
+            positions = self.ib.positions()
+            logger.info(f"Retrieved {len(positions)} positions from IB")
 
-        # Request portfolio
-        accounts = self.ib.managedAccounts()
-        if accounts:
-            self.ib.reqAccountSummary()
-            self.ib.sleep(1)
+            # Clear old positions and rebuild from IB
+            self.positions.clear()
 
-            # Subscribe to PnL
-            for symbol in self.positions:
-                contract = Stock(symbol, 'SMART', 'USD')
-                self.ib.qualifyContracts(contract)
+            for pos in positions:
+                symbol = pos.contract.symbol
+                qty = int(pos.position)
+                avg_cost = pos.avgCost
 
-        logger.info(f"Synchronized {len(self.positions)} positions")
+                if qty != 0:
+                    direction = 'LONG' if qty > 0 else 'SHORT'
+                    self.positions[symbol] = PositionInfo(
+                        symbol=symbol,
+                        direction=direction,
+                        quantity=abs(qty),
+                        avg_cost=avg_cost,
+                        highest_price=avg_cost if direction == 'LONG' else 0,
+                        lowest_price=avg_cost if direction == 'SHORT' else 0,
+                        entry_date=datetime.now().strftime('%Y-%m-%d')
+                    )
+                    logger.info(f"  {symbol}: {qty} @ ${avg_cost:.2f} ({direction})")
+
+            # Get portfolio for market values
+            portfolio = self.ib.portfolio()
+            for item in portfolio:
+                symbol = item.contract.symbol
+                if symbol in self.positions:
+                    p = self.positions[symbol]
+                    p.current_price = item.marketPrice
+                    p.market_value = abs(item.marketValue)
+                    p.unrealized_pnl = item.unrealizedPNL
+                    # Update highest/lowest for trailing stop
+                    if p.direction == 'LONG' and item.marketPrice > p.highest_price:
+                        p.highest_price = item.marketPrice
+                    elif p.direction == 'SHORT':
+                        if p.lowest_price == 0 or item.marketPrice < p.lowest_price:
+                            p.lowest_price = item.marketPrice
+
+            logger.info(f"Synchronized {len(self.positions)} positions")
+
+        except Exception as e:
+            logger.error(f"Error syncing positions: {e}")
+            import traceback
+            traceback.print_exc()
 
     def download_price_data(self, symbol: str, days: int = 100) -> Optional[pd.DataFrame]:
         """Download historical price data"""
