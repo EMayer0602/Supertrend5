@@ -695,16 +695,23 @@ class IBPaperTrader:
 
         return top_candidates
 
-    def get_strategy_candidates(self) -> List[Tuple[str, str, float]]:
+    def get_strategy_candidates(self, exclude_symbols: List[str] = None) -> List[Tuple[str, str, float]]:
         """
         Find strategy positions with current BUY signals.
         OPTIMIZED: Sorts by stored return first, then checks trend until we have enough.
+
+        Args:
+            exclude_symbols: Symbols to skip (e.g., B&H candidates already selected)
+
         Returns list of (symbol, strategy, price) for symbols with active BUY signal.
         """
+        exclude = set(exclude_symbols or [])
+
         # Pre-sort by stored return (highest first) - check best performers first!
+        # EXCLUDE symbols already selected for B&H!
         sorted_symbols = sorted(
             [(sym, data) for sym, data in self.long_assignments.items()
-             if data.get('return', 0) >= 0.15],  # Only >= 15% PnL
+             if data.get('return', 0) >= 0.15 and sym not in exclude],  # Only >= 15% PnL, not in B&H
             key=lambda x: x[1].get('return', 0),
             reverse=True
         )
@@ -713,6 +720,8 @@ class IBPaperTrader:
         total = len(sorted_symbols)
         checked = 0
 
+        if exclude:
+            logger.info(f"Excluding {len(exclude)} B&H symbols: {', '.join(sorted(exclude))}")
         logger.info(f"Checking {total} symbols for bullish trends (sorted by expected return)...")
 
         # Check symbols in order of expected return until we have enough
@@ -818,10 +827,12 @@ class IBPaperTrader:
 
         logger.info(f"Current positions: {current_bh} B&H + {current_strat} Strategy")
 
-        # 1. Open B&H positions
+        # 1. Open B&H positions (Top 10 by stored return)
+        bh_symbols = []  # Track B&H symbols to exclude from Strategy
         if current_bh < BH_POSITIONS:
             bh_candidates = self.get_best_bh_candidates()
             for symbol, ret, price in bh_candidates:
+                bh_symbols.append(symbol)  # Track for exclusion
                 if symbol in self.positions:
                     continue
                 if len(self.positions) >= MAX_POSITIONS:
@@ -846,9 +857,9 @@ class IBPaperTrader:
 
                 self.ib.sleep(0.5)  # Avoid rate limits
 
-        # 2. Open Strategy positions
+        # 2. Open Strategy positions (excluding B&H symbols!)
         if current_strat < STRATEGY_POSITIONS:
-            strat_candidates = self.get_strategy_candidates()
+            strat_candidates = self.get_strategy_candidates(exclude_symbols=bh_symbols)
             for symbol, strategy, price in strat_candidates:
                 if symbol in self.positions:
                     continue
