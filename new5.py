@@ -2552,13 +2552,13 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
         # LONG STRATEGIES (Buy on bullish, Sell on bearish)
         # =================================================================
 
-        # SUPERTREND LONG - Expanded parameter grid
+        # SUPERTREND LONG - Optimized parameter grid (balanced for win rate)
         for use_htf in [False, True]:
             htf_label = "_HTF" if use_htf else ""
             best_return = -np.inf
             best_params = None
-            for period in [7, 10, 14, 20, 25, 30]:
-                for mult in [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]:
+            for period in [10, 14, 20]:
+                for mult in [2.0, 2.5, 3.0]:
                     try:
                         supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
                         htf_dir = htf_direction if use_htf else None
@@ -2574,12 +2574,12 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
             if best_return > -np.inf:
                 long_results[f'SUPERTREND{htf_label}'] = {'return': float(best_return), 'params': best_params}
 
-        # JMA/KAMA/EMA/SMA LONG - Expanded parameter grid
+        # JMA/KAMA/EMA/SMA LONG - Optimized parameter grid (balanced for win rate)
         for ma_name, calc_func, param_ranges in [
-            ('JMA', calculate_jma, {'fast': [5, 7, 10, 14, 20], 'slow': [14, 21, 30, 50, 100]}),
-            ('KAMA', lambda s, p: calculate_kama(s, p), {'period': [5, 7, 10, 14, 20], 'signal': [7, 10, 14, 21, 30]}),
-            ('EMA', calculate_ema, {'fast': [5, 8, 12, 20, 26], 'slow': [13, 21, 26, 50, 100]}),
-            ('SMA', calculate_sma, {'fast': [5, 10, 20, 30, 50], 'slow': [20, 50, 100, 150, 200]}),
+            ('JMA', calculate_jma, {'fast': [7, 10, 14], 'slow': [21, 30, 50]}),
+            ('KAMA', lambda s, p: calculate_kama(s, p), {'period': [10, 14, 20], 'signal': [10, 14, 21]}),
+            ('EMA', calculate_ema, {'fast': [8, 12, 20], 'slow': [21, 26, 50]}),
+            ('SMA', calculate_sma, {'fast': [10, 20, 30], 'slow': [50, 100, 200]}),
         ]:
             for use_htf in [False, True]:
                 htf_label = "_HTF" if use_htf else ""
@@ -2624,13 +2624,13 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
 
         # =================================================================
         # LONG MAXMA STRATEGIES: HTF(MA) x MA Crossover
-        # Weekly MA crosses Daily MA - Expanded parameter grid
+        # Weekly MA crosses Daily MA - Optimized for win rate
         # =================================================================
         for ma_name, calc_func, htf_periods, daily_periods in [
-            ('JMA', calculate_jma, [5, 7, 10, 14, 20], [5, 7, 10, 14, 20]),
-            ('KAMA', lambda s, p: calculate_kama(s, p), [5, 7, 10, 14, 20], [5, 7, 10, 14, 20]),
-            ('EMA', calculate_ema, [5, 8, 10, 13, 20], [5, 8, 12, 20, 26]),
-            ('SMA', calculate_sma, [5, 10, 13, 20, 26], [5, 10, 20, 30, 50]),
+            ('JMA', calculate_jma, [7, 10, 14], [7, 10, 14]),
+            ('KAMA', lambda s, p: calculate_kama(s, p), [10, 14, 20], [10, 14, 20]),
+            ('EMA', calculate_ema, [8, 10, 13], [8, 12, 20]),
+            ('SMA', calculate_sma, [10, 13, 20], [10, 20, 30]),
         ]:
             best_return = -np.inf
             best_params = None
@@ -2667,14 +2667,14 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
         # Different parameters: shorter periods, tighter multipliers
         # =================================================================
 
-        # SUPERTREND SHORT - Expanded parameter grid
+        # SUPERTREND SHORT - Optimized for win rate
         for use_htf in [False, True]:
             htf_label = "_HTF" if use_htf else ""
             best_return = -np.inf
             best_params = None
-            # Expanded parameter grid for shorts
-            for period in [5, 7, 10, 14, 20, 25]:
-                for mult in [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]:
+            # Shorter periods work better for shorts
+            for period in [7, 10, 14]:
+                for mult in [1.5, 2.0, 2.5, 3.0]:
                     try:
                         supertrend, direction, _ = calculate_supertrend_vectorized(high, low, close, period, mult)
                         # For shorts: entry on bearish (direction -1), exit on bullish (direction 1)
@@ -2697,12 +2697,12 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
             if best_return > -np.inf:
                 short_results[f'SUPERTREND{htf_label}'] = {'return': float(best_return), 'params': best_params}
 
-        # MA SHORTS - Expanded parameter grid
+        # MA SHORTS - Optimized for win rate
         for ma_name, calc_func, param_ranges in [
-            ('JMA', calculate_jma, {'fast': [3, 5, 7, 10, 14], 'slow': [10, 14, 21, 30, 50]}),
-            ('KAMA', lambda s, p: calculate_kama(s, p), {'period': [3, 5, 7, 10, 14], 'signal': [5, 7, 10, 14, 21]}),
-            ('EMA', calculate_ema, {'fast': [3, 5, 8, 12, 20], 'slow': [8, 13, 21, 26, 50]}),
-            ('SMA', calculate_sma, {'fast': [3, 5, 10, 20, 30], 'slow': [10, 20, 30, 50, 100]}),
+            ('JMA', calculate_jma, {'fast': [5, 7, 10], 'slow': [14, 21, 30]}),
+            ('KAMA', lambda s, p: calculate_kama(s, p), {'period': [7, 10, 14], 'signal': [7, 10, 14]}),
+            ('EMA', calculate_ema, {'fast': [5, 8, 12], 'slow': [13, 21, 26]}),
+            ('SMA', calculate_sma, {'fast': [5, 10, 20], 'slow': [20, 30, 50]}),
         ]:
             for use_htf in [False, True]:
                 htf_label = "_HTF" if use_htf else ""
@@ -2752,13 +2752,13 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
 
         # =================================================================
         # SHORT MAXMA STRATEGIES: HTF(MA) x MA Crossover (inverted)
-        # Daily MA crosses below Weekly MA = Short entry - Expanded grid
+        # Daily MA crosses below Weekly MA = Short entry - Optimized
         # =================================================================
         for ma_name, calc_func, htf_periods, daily_periods in [
-            ('JMA', calculate_jma, [3, 5, 7, 10, 14], [3, 5, 7, 10, 14]),
-            ('KAMA', lambda s, p: calculate_kama(s, p), [3, 5, 7, 10, 14], [3, 5, 7, 10, 14]),
-            ('EMA', calculate_ema, [3, 5, 8, 10, 13], [3, 5, 8, 12, 20]),
-            ('SMA', calculate_sma, [3, 5, 10, 13, 20], [3, 5, 10, 20, 30]),
+            ('JMA', calculate_jma, [5, 7, 10], [5, 7, 10]),
+            ('KAMA', lambda s, p: calculate_kama(s, p), [7, 10, 14], [7, 10, 14]),
+            ('EMA', calculate_ema, [5, 8, 10], [5, 8, 12]),
+            ('SMA', calculate_sma, [5, 10, 13], [5, 10, 20]),
         ]:
             best_return = -np.inf
             best_params = None
