@@ -657,6 +657,11 @@ class IBPaperTrader:
         stake = capital / 30
         quantity = round(stake / price)
         """
+        # Safety check for invalid prices
+        if not price or price <= 0 or math.isnan(price):
+            logger.warning(f"Invalid price {price}, returning quantity=1")
+            return 1
+
         stake = self.capital / MAX_POSITIONS
         quantity = round(stake / price)
         return max(1, quantity)
@@ -798,6 +803,10 @@ class IBPaperTrader:
 
                 if is_bullish:
                     price = close[-1]
+                    # Skip if price is NaN
+                    if math.isnan(price) or price <= 0:
+                        logger.warning(f"    -> BULLISH but invalid price: {price}")
+                        continue
                     expected_return = assign_data.get('return', 0)
                     candidates.append((symbol, strategy, price, expected_return))
                     logger.info(f"    -> BULLISH! Added to candidates")
