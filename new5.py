@@ -2710,9 +2710,16 @@ def test_ticker_long_short_separate(symbol: str, days_back: int = 365, end_offse
         return {'symbol': symbol, 'error': str(e)}
 
 
-def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, end_offset_days: int = 90):
+def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, end_offset_days: int = 90,
+                                   custom_tickers: list = None):
     """
     Run separate LONG and SHORT optimization and categorization.
+
+    Args:
+        days_back: Days of history for optimization
+        min_pnl: Minimum PnL threshold
+        end_offset_days: Days before end for test period
+        custom_tickers: Optional list of custom tickers (from volatility scan)
 
     Categories:
     - LONG: STRATEGY_LONG_HTF, STRATEGY_LONG_NOHTF
@@ -2732,8 +2739,13 @@ def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, e
             return obj.tolist()
         return obj
 
+    # Use custom tickers if provided, otherwise ALL_TICKERS
+    tickers = custom_tickers if custom_tickers else ALL_TICKERS
+    ticker_source = "custom (volatility filtered)" if custom_tickers else "ALL_TICKERS"
+
     print("="*80)
     print("LONG/SHORT SEPARATE OPTIMIZATION & CATEGORIZATION")
+    print(f"Tickers: {len(tickers)} ({ticker_source})")
     print(f"Optimization: {days_back} days, ending {end_offset_days} days ago")
     print(f"Min PnL: LONG >= {min_pnl:.0%}, SHORT >= {min_pnl:.0%}")
     print("="*80)
@@ -2760,8 +2772,8 @@ def run_long_short_categorization(days_back: int = 270, min_pnl: float = 0.15, e
     all_results = {}
     error_count = 0
 
-    for i, symbol in enumerate(ALL_TICKERS, 1):
-        print(f"\n[{i}/{len(ALL_TICKERS)}] {symbol}...", end=" ")
+    for i, symbol in enumerate(tickers, 1):
+        print(f"\n[{i}/{len(tickers)}] {symbol}...", end=" ")
 
         result = test_ticker_long_short_separate(symbol, days_back, end_offset_days)
 
@@ -3173,6 +3185,22 @@ def run_walk_forward_analysis(optimize_days: int = 270, test_days: int = 90, min
 
 if __name__ == "__main__":
     import sys
+    import json as json_module
+
+    # Check for --tickers argument
+    custom_tickers = None
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == "--tickers" and i < len(sys.argv) - 1:
+            tickers_file = sys.argv[i + 1]
+            try:
+                with open(tickers_file, 'r') as f:
+                    data = json_module.load(f)
+                    custom_tickers = data.get('tickers', [])
+                    print(f"Loaded {len(custom_tickers)} tickers from {tickers_file}")
+            except Exception as e:
+                print(f"Error loading tickers file: {e}")
+                sys.exit(1)
+
     if len(sys.argv) > 1 and sys.argv[1] == "--multi":
         run_multi_ticker_analysis()
         disconnect_ib()
@@ -3202,7 +3230,8 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "--long-short":
         # Separate LONG/SHORT optimization (9 months, test on last 3 months)
         # Lower threshold for shorts (15%) since they are harder
-        run_long_short_categorization(days_back=270, min_pnl=0.15, end_offset_days=90)
+        run_long_short_categorization(days_back=270, min_pnl=0.15, end_offset_days=90,
+                                      custom_tickers=custom_tickers)
     else:
         main()
         disconnect_ib()
