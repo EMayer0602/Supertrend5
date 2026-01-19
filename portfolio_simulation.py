@@ -123,7 +123,8 @@ class PortfolioSimulator:
                  trailing_stop_pct: float = 0.20,
                  take_profit_pct: float = 0.30,  # NEW: Take profit at 30%
                  min_expected_return: float = 0.25,  # NEW: Min 25% expected return
-                 long_only: bool = False):
+                 long_only: bool = False,
+                 ticker_filter: set = None):  # NEW: Filter by analyst tickers
 
         self.initial_capital = initial_capital
         self.capital = initial_capital
@@ -135,6 +136,7 @@ class PortfolioSimulator:
         self.take_profit_pct = take_profit_pct  # NEW
         self.min_expected_return = min_expected_return  # NEW
         self.long_only = long_only
+        self.ticker_filter = ticker_filter  # NEW: Filter by analyst tickers
 
         self.open_positions: Dict[str, Position] = {}  # symbol -> Position
         self.closed_positions: List[Position] = []
@@ -657,8 +659,22 @@ class PortfolioSimulator:
             except Exception as e:
                 print(f"Warning: Could not load strategy assignments: {e}")
 
+        # Apply ticker filter (e.g., analyst_tickers.json)
+        if self.ticker_filter:
+            orig_long = len(self.long_assignments)
+            orig_short = len(self.short_assignments)
+
+            self.long_assignments = {k: v for k, v in self.long_assignments.items() if k in self.ticker_filter}
+            self.short_assignments = {k: v for k, v in self.short_assignments.items() if k in self.ticker_filter}
+            self.strategy_assignments = {k: v for k, v in self.strategy_assignments.items() if k in self.ticker_filter}
+
+            print(f"Filtered to analyst tickers: LONG {orig_long} -> {len(self.long_assignments)}, SHORT {orig_short} -> {len(self.short_assignments)}")
+
+        # Determine which tickers to load price data for
+        tickers_to_load = list(self.ticker_filter) if self.ticker_filter else ALL_TICKERS
+
         # Load price data
-        self.load_price_data(ALL_TICKERS, days_back + 50)
+        self.load_price_data(tickers_to_load, days_back + 50)
 
         if not self.price_data:
             print("ERROR: No price data available")
@@ -1408,7 +1424,7 @@ class PortfolioSimulator:
 
 def run_portfolio_simulation(days_back: int = 180, long_only: bool = False,
                              take_profit: float = 0.30, min_return: float = 0.25,
-                             max_pos: int = 30):
+                             max_pos: int = 30, ticker_filter: set = None):
     """Main function to run portfolio simulation
 
     Args:
@@ -1417,12 +1433,15 @@ def run_portfolio_simulation(days_back: int = 180, long_only: bool = False,
         take_profit: Take profit percentage (default 30%)
         min_return: Minimum expected return to trade (default 25%)
         max_pos: Maximum positions (default 30)
+        ticker_filter: Set of tickers to include (None = all tickers)
     """
     mode_str = "LONG ONLY" if long_only else "LONG & SHORT"
     print(f"\nTrading Mode: {mode_str}")
     print(f"Take Profit: {take_profit*100:.0f}%")
     print(f"Min Expected Return: {min_return*100:.0f}%")
     print(f"Max Positions: {max_pos}")
+    if ticker_filter:
+        print(f"Ticker Filter: {len(ticker_filter)} symbols")
 
     # Adjust B&H and Strategy positions proportionally
     bh_pos = max(5, int(max_pos * 0.33))  # ~33% B&H
@@ -1437,7 +1456,8 @@ def run_portfolio_simulation(days_back: int = 180, long_only: bool = False,
         trailing_stop_pct=0.20,  # 20% trailing stop for B&H
         take_profit_pct=take_profit,  # NEW: Take profit level
         min_expected_return=min_return,  # NEW: Min return filter
-        long_only=long_only
+        long_only=long_only,
+        ticker_filter=ticker_filter  # NEW: Filter by analyst tickers
     )
 
     simulator.run_simulation(days_back=days_back, rebalance_freq=5)
@@ -1458,8 +1478,20 @@ if __name__ == "__main__":
     parser.add_argument('--take-profit', type=float, default=0.30, help='Take profit %% (default: 0.30 = 30%%)')
     parser.add_argument('--min-return', type=float, default=0.25, help='Min expected return (default: 0.25 = 25%%)')
     parser.add_argument('--max-pos', type=int, default=30, help='Max positions (default: 30)')
+    parser.add_argument('--tickers', type=str, help='Filter to tickers from JSON file (e.g., analyst_tickers.json)')
 
     args = parser.parse_args()
+
+    # Load ticker filter if provided
+    ticker_filter = None
+    if args.tickers:
+        try:
+            with open(args.tickers, 'r') as f:
+                data = json.load(f)
+                ticker_filter = set(data.get('tickers', []))
+                print(f"Filtering to {len(ticker_filter)} tickers from {args.tickers}")
+        except Exception as e:
+            print(f"Error loading ticker filter: {e}")
 
     print("\n" + "="*60)
     print("OPTIMIZED PORTFOLIO SIMULATION")
@@ -1470,5 +1502,6 @@ if __name__ == "__main__":
         long_only=args.long_only,
         take_profit=args.take_profit,
         min_return=args.min_return,
-        max_pos=args.max_pos
+        max_pos=args.max_pos,
+        ticker_filter=ticker_filter
     )
