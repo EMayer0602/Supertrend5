@@ -157,12 +157,14 @@ class IBPaperTrader:
                  host: str = IB_HOST,
                  port: int = IB_PORT,
                  client_id: int = IB_CLIENT_ID,
-                 long_only: bool = False):
+                 long_only: bool = False,
+                 dry_run: bool = False):
 
         self.host = host
         self.port = port
         self.client_id = client_id
         self.long_only = long_only
+        self.dry_run = dry_run  # Wenn True: Zeigt Orders aber sendet nicht
 
         self.ib = IB()
         self.connected = False
@@ -664,7 +666,7 @@ class IBPaperTrader:
 
     def place_order(self, symbol: str, action: str, quantity: int) -> Optional[int]:
         """
-        Place an order with IB
+        Place an order with IB (or simulate in dry-run mode)
 
         Fee handling:
         - BUY: entry_fee = qty * price * fee_rate → deduct from capital
@@ -689,9 +691,19 @@ class IBPaperTrader:
             else:  # SELL, SHORT
                 limit_price = round(price * 0.999, 2)  # 0.1% below
 
-            # Calculate fee
+            # Calculate fee and order value
             fee = self.calculate_entry_fee(quantity, limit_price) if action in ['BUY', 'SHORT'] else self.calculate_exit_fee(quantity, limit_price)
+            order_value = quantity * limit_price
 
+            # DRY RUN MODE: Nur anzeigen, nicht senden
+            if self.dry_run:
+                logger.info(f"[DRY-RUN] Would {action} {quantity} {symbol} @ ${limit_price:.2f}")
+                logger.info(f"[DRY-RUN]   Order Value: ${order_value:,.2f}")
+                logger.info(f"[DRY-RUN]   Fee: ${fee:.2f}")
+                logger.info(f"[DRY-RUN]   Capital would be: ${self.capital - fee:,.2f}")
+                return -1  # Fake order ID für dry-run
+
+            # LIVE MODE: Order an TWS senden
             order = LimitOrder(action, quantity, limit_price)
             order.tif = 'DAY'
 
@@ -1248,13 +1260,19 @@ class IBPaperTrader:
 def main():
     parser = argparse.ArgumentParser(description='IB Paper Trader')
     parser.add_argument('--force', action='store_true', help='Override market hours check')
+    parser.add_argument('--dry-run', action='store_true', help='Show orders without sending to TWS')
     parser.add_argument('--dashboard', action='store_true', help='Generate dashboard only (no IB connection)')
     parser.add_argument('--sync', action='store_true', help='Sync positions with IB and generate dashboard')
     parser.add_argument('--long-only', action='store_true', help='Only trade LONG positions')
     parser.add_argument('--port', type=int, default=7497, help='TWS port (default: 7497)')
     args = parser.parse_args()
 
-    trader = IBPaperTrader(port=args.port, long_only=args.long_only)
+    trader = IBPaperTrader(port=args.port, long_only=args.long_only, dry_run=args.dry_run)
+
+    if args.dry_run:
+        logger.info("=" * 60)
+        logger.info("DRY-RUN MODE - Orders werden NICHT gesendet!")
+        logger.info("=" * 60)
 
     if args.dashboard:
         # Just generate dashboard from saved state (no IB connection)
