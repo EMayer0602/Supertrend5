@@ -1010,8 +1010,11 @@ class IBPaperTrader:
             # Sync positions from IB
             self.sync_positions()
 
-            # Check market data
-            self.check_data_subscription()
+            # Check market data (skip in dry-run mode to avoid hanging)
+            if not self.dry_run:
+                self.check_data_subscription()
+            else:
+                logger.info("Skipping market data check in dry-run mode")
 
             # Open initial positions if we have less than target
             if len(self.positions) < MAX_POSITIONS:
@@ -1020,6 +1023,13 @@ class IBPaperTrader:
 
             # Save state after initial opening
             self.save_state()
+
+            # In dry-run mode, exit after showing orders
+            if self.dry_run:
+                logger.info("=" * 60)
+                logger.info("DRY-RUN complete. No orders were sent.")
+                logger.info("=" * 60)
+                return
 
             # Subscribe to PnL
             accounts = self.ib.managedAccounts()
