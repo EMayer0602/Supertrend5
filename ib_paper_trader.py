@@ -931,9 +931,19 @@ class IBPaperTrader:
             else:  # SELL, SHORT
                 limit_price = round(price * 0.995, 2)  # Fallback: 0.5% below
 
+            # Safety check for limit price
+            if math.isnan(limit_price) or limit_price <= 0:
+                logger.error(f"  {symbol}: Invalid limit price {limit_price}, skipping order")
+                return None
+
             # Calculate fee and order value
             fee = self.calculate_entry_fee(quantity, limit_price) if action in ['BUY', 'SHORT'] else self.calculate_exit_fee(quantity, limit_price)
             order_value = quantity * limit_price
+
+            # Safety check for fee (don't corrupt capital with NaN)
+            if math.isnan(fee):
+                logger.error(f"  {symbol}: Invalid fee calculation, skipping order")
+                return None
 
             # DRY RUN MODE: Nur anzeigen, nicht senden
             if self.dry_run:
