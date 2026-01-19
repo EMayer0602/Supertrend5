@@ -657,6 +657,11 @@ class IBPaperTrader:
         stake = capital / 30
         quantity = round(stake / price)
         """
+        # Safety check for invalid capital
+        if math.isnan(self.capital) or self.capital <= 0:
+            logger.error(f"Invalid capital {self.capital}, resetting to {INITIAL_CAPITAL}")
+            self.capital = INITIAL_CAPITAL
+
         # Safety check for invalid prices
         if not price or price <= 0 or math.isnan(price):
             logger.warning(f"Invalid price {price}, returning quantity=1")
