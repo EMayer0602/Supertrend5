@@ -1103,8 +1103,12 @@ class IBPaperTrader:
             # Sync positions from IB
             self.sync_positions()
 
-            # Check market data
-            self.check_data_subscription()
+            # Check market data (skip with --force to avoid delays)
+            if force:
+                logger.info("Skipping market data check (--force)")
+            else:
+                logger.info("Checking market data subscription...")
+                self.check_data_subscription()
 
             # Open initial positions if we have less than target
             if len(self.positions) < MAX_POSITIONS:
