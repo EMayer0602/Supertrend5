@@ -248,8 +248,13 @@ class IBPaperTrader:
             with open(STATE_FILE, 'r') as f:
                 data = json.load(f)
 
-                # Load capital (default to INITIAL_CAPITAL if not present)
-                self.capital = data.get('capital', INITIAL_CAPITAL)
+                # Load capital (default to INITIAL_CAPITAL if not present or invalid)
+                loaded_capital = data.get('capital', INITIAL_CAPITAL)
+                if loaded_capital is None or (isinstance(loaded_capital, float) and math.isnan(loaded_capital)) or loaded_capital <= 0:
+                    logger.warning(f"Invalid capital in state file ({loaded_capital}), resetting to ${INITIAL_CAPITAL}")
+                    self.capital = INITIAL_CAPITAL
+                else:
+                    self.capital = loaded_capital
                 self.total_fees = data.get('total_fees', 0.0)
 
                 # Load positions (handle old and new format)
