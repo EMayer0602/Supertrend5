@@ -50,10 +50,10 @@ LOG_FILE = "ib_paper_trader.log"
 DASHBOARD_FILE = "ib_dashboard.html"
 
 # Trading parameters
+INITIAL_CAPITAL = 20000  # Starting capital
 MAX_POSITIONS = 30
-POSITION_STAKE = 25000  # $ per position
-TRAILING_STOP_PCT = 0.20  # 20% trailing stop for B&H
-MIN_PNL_THRESHOLD = 0.15  # 15% minimum expected return
+TRAILING_STOP_PCT = 0.20  # 20% trailing stop
+FEE_RATE = 0.0001  # 0.01% fee (TWS typical) - wird von TWS überschrieben wenn verfügbar
 
 # IB connection
 IB_HOST = "127.0.0.1"
@@ -182,9 +182,11 @@ class IBPaperTrader:
         self.last_prices: Dict[str, float] = {}
 
         # Account info
+        self.capital = INITIAL_CAPITAL  # Aktuelles Kapital
         self.account_value = 0.0
         self.buying_power = 0.0
         self.daily_pnl = 0.0
+        self.total_fees = 0.0
 
         # Load state
         self.load_state()
@@ -239,6 +241,10 @@ class IBPaperTrader:
             with open(STATE_FILE, 'r') as f:
                 data = json.load(f)
 
+                # Load capital (default to INITIAL_CAPITAL if not present)
+                self.capital = data.get('capital', INITIAL_CAPITAL)
+                self.total_fees = data.get('total_fees', 0.0)
+
                 # Load positions (handle old and new format)
                 for symbol, pos_data in data.get('positions', {}).items():
                     # Detect old format (no 'direction' field)
@@ -276,10 +282,10 @@ class IBPaperTrader:
                     except Exception:
                         pass  # Skip malformed entries
 
-                logger.info(f"Loaded state: {len(self.positions)} positions, {len(self.signals)} signals")
+                logger.info(f"Loaded state: Capital=${self.capital:.2f}, {len(self.positions)} positions, {len(self.signals)} signals")
 
         except FileNotFoundError:
-            logger.info("No existing state file, starting fresh")
+            logger.info(f"No existing state file, starting fresh with ${INITIAL_CAPITAL}")
         except Exception as e:
             logger.error(f"Error loading state: {e}")
 
@@ -287,6 +293,8 @@ class IBPaperTrader:
         """Save state to file"""
         try:
             data = {
+                'capital': self.capital,
+                'total_fees': self.total_fees,
                 'positions': {
                     symbol: {
                         'direction': pos.direction,
@@ -637,11 +645,31 @@ class IBPaperTrader:
             return None
 
     def calculate_quantity(self, price: float) -> int:
-        """Calculate position size"""
-        return max(1, int(POSITION_STAKE / price))
+        """
+        Calculate position size based on current capital
+        stake = capital / 30
+        quantity = round(stake / price)
+        """
+        stake = self.capital / MAX_POSITIONS
+        quantity = round(stake / price)
+        return max(1, quantity)
+
+    def calculate_entry_fee(self, quantity: int, price: float) -> float:
+        """Calculate entry fee: quantity * price * fee_rate"""
+        return quantity * price * FEE_RATE
+
+    def calculate_exit_fee(self, quantity: int, price: float) -> float:
+        """Calculate exit fee: quantity * price * fee_rate"""
+        return quantity * price * FEE_RATE
 
     def place_order(self, symbol: str, action: str, quantity: int) -> Optional[int]:
-        """Place an order with IB"""
+        """
+        Place an order with IB
+
+        Fee handling:
+        - BUY: entry_fee = qty * price * fee_rate → deduct from capital
+        - SELL: exit_fee = qty * price * fee_rate → deduct from capital
+        """
         try:
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
@@ -661,10 +689,17 @@ class IBPaperTrader:
             else:  # SELL, SHORT
                 limit_price = round(price * 0.999, 2)  # 0.1% below
 
+            # Calculate fee
+            fee = self.calculate_entry_fee(quantity, limit_price) if action in ['BUY', 'SHORT'] else self.calculate_exit_fee(quantity, limit_price)
+
             order = LimitOrder(action, quantity, limit_price)
             order.tif = 'DAY'
 
             trade = self.ib.placeOrder(contract, order)
+
+            # Deduct fee from capital
+            self.capital -= fee
+            self.total_fees += fee
 
             # Log the order
             log = TradeLog(
@@ -680,7 +715,8 @@ class IBPaperTrader:
 
             self.pending_orders[trade.order.orderId] = log
 
-            logger.info(f"Placed {action} order for {quantity} {symbol} @ ${limit_price:.2f}")
+            logger.info(f"Placed {action} order for {quantity} {symbol} @ ${limit_price:.2f} (Fee: ${fee:.2f})")
+            logger.info(f"Capital after fee: ${self.capital:.2f}")
 
             return trade.order.orderId
 
