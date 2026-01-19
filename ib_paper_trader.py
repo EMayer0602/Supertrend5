@@ -18,6 +18,7 @@ Usage:
 import asyncio
 import json
 import logging
+import math
 import sys
 import time
 import argparse
@@ -852,6 +853,11 @@ class IBPaperTrader:
                 if len(self.positions) >= MAX_POSITIONS:
                     break
 
+                # Skip if price is invalid (NaN or zero)
+                if not price or price <= 0 or math.isnan(price):
+                    logger.warning(f"Skipping {symbol}: Invalid price {price}")
+                    continue
+
                 # Use price from strategy check for quantity calculation
                 qty = self.calculate_quantity(price)
                 logger.info(f"Opening Strategy position: {symbol} ({strategy})")
@@ -877,21 +883,29 @@ class IBPaperTrader:
             self.ib.sleep(1)
 
             # Get bid/ask for midpoint calculation
-            bid = ticker.bid if ticker.bid > 0 else 0
-            ask = ticker.ask if ticker.ask > 0 else 0
-            last = ticker.last if ticker.last > 0 else ticker.close
+            bid = ticker.bid if ticker.bid and ticker.bid > 0 and not math.isnan(ticker.bid) else 0
+            ask = ticker.ask if ticker.ask and ticker.ask > 0 and not math.isnan(ticker.ask) else 0
+            last = ticker.last if ticker.last and ticker.last > 0 and not math.isnan(ticker.last) else 0
+            close = ticker.close if ticker.close and ticker.close > 0 and not math.isnan(ticker.close) else 0
 
-            # Use midpoint if bid/ask available, otherwise use last price
+            # Use midpoint if bid/ask available, otherwise use last/close price
             if bid > 0 and ask > 0:
                 mid_price = (bid + ask) / 2
                 price = last if last > 0 else mid_price
                 logger.info(f"  {symbol}: Bid=${bid:.2f} Ask=${ask:.2f} Mid=${mid_price:.2f}")
-            else:
+            elif last > 0:
                 mid_price = last
                 price = last
                 logger.info(f"  {symbol}: Last=${last:.2f} (no bid/ask)")
+            elif close > 0:
+                mid_price = close
+                price = close
+                logger.info(f"  {symbol}: Close=${close:.2f} (no bid/ask/last)")
+            else:
+                logger.error(f"  {symbol}: No valid price data available")
+                return None
 
-            if price <= 0:
+            if price <= 0 or math.isnan(price):
                 logger.error(f"No price available for {symbol}")
                 return None
 
