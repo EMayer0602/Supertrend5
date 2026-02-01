@@ -70,7 +70,53 @@ FLEX_QUERY_ID = ""  # Deine Query ID
 CONFIG_FILE = "dashboard_config.json"
 CATEGORIES_FILE = "stock_categories.json"
 OUTPUT_FILE = "dashboard.html"
+OUTPUT_FILE_DE = "dashboard_de.html"
 HISTORY_FILE = "portfolio_history.json"
+
+# Max Hold Bars (Tage)
+MAX_HOLD_BARS = 60
+
+
+# =============================================================================
+# NUMBER FORMATTING
+# =============================================================================
+def format_number_en(value: float, decimals: int = 2, prefix: str = "$") -> str:
+    """Format number in English style: $1,234.56"""
+    if math.isnan(value) if isinstance(value, float) else False:
+        value = 0
+    if decimals == 0:
+        return f"{prefix}{value:+,.0f}" if value != 0 else f"{prefix}0"
+    return f"{prefix}{value:+,.{decimals}f}" if value != 0 else f"{prefix}0.{'0' * decimals}"
+
+
+def format_number_de(value: float, decimals: int = 2, prefix: str = "") -> str:
+    """Format number in German style: 1.234,56 €"""
+    if math.isnan(value) if isinstance(value, float) else False:
+        value = 0
+    # Format with US locale first, then swap
+    if decimals == 0:
+        formatted = f"{value:+,.0f}"
+    else:
+        formatted = f"{value:+,.{decimals}f}"
+    # Swap . and , for German format
+    formatted = formatted.replace(',', 'X').replace('.', ',').replace('X', '.')
+    suffix = " €" if prefix == "$" else ""
+    return f"{formatted}{suffix}"
+
+
+def format_pct_en(value: float) -> str:
+    """Format percentage English style: +12.34%"""
+    if math.isnan(value) if isinstance(value, float) else False:
+        value = 0
+    return f"{value:+.2f}%"
+
+
+def format_pct_de(value: float) -> str:
+    """Format percentage German style: +12,34%"""
+    if math.isnan(value) if isinstance(value, float) else False:
+        value = 0
+    formatted = f"{value:+.2f}%"
+    return formatted.replace('.', ',')
 
 # FlexQuery API URLs
 FLEX_REQUEST_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
@@ -152,6 +198,162 @@ def get_ticker_strategy(ticker: str) -> str:
             if ticker in data.get('tickers', []):
                 return strategy
     return "MANUAL"
+
+
+# =============================================================================
+# STAKE CALCULATION & TRADE RECALCULATION
+# =============================================================================
+def recalculate_trades(raw_trades: List[Dict], initial_capital: float, max_positions: int,
+                       entry_fee: float, exit_fee: float, start_date: str = None) -> Tuple[List[Dict], List[Dict], float]:
+    """
+    Recalculate historical trades with proper stake logic.
+
+    Takes entry/exit dates and prices from raw trades, but recalculates:
+    - stake = current_capital / max_positions
+    - amount = int(stake / entry_price)
+    - fees
+    - PnL
+    - capital after each trade
+
+    Args:
+        raw_trades: List of trades with entry_date, exit_date, entry_price, exit_price, symbol
+        initial_capital: Starting capital
+        max_positions: Maximum number of positions
+        entry_fee: Fee per entry
+        exit_fee: Fee per exit
+        start_date: Only process trades from this date onwards (YYYY-MM-DD)
+
+    Returns:
+        (recalculated_closed_trades, recalculated_open_positions, current_capital)
+    """
+    capital = initial_capital
+    closed_trades = []
+    open_positions = []
+
+    # Sort trades by entry date
+    sorted_trades = sorted(raw_trades, key=lambda x: (x.get('entry_date', ''), x.get('entry_time', '')))
+
+    # Filter by start date if provided
+    if start_date:
+        sorted_trades = [t for t in sorted_trades if t.get('entry_date', '') >= start_date]
+
+    for raw_trade in sorted_trades:
+        entry_price = raw_trade.get('entry_price', 0)
+        exit_price = raw_trade.get('exit_price')
+
+        if entry_price <= 0:
+            continue
+
+        # Calculate stake and amount
+        stake = capital / max_positions
+        amount = int(stake / entry_price)
+
+        if amount <= 0:
+            continue
+
+        # Calculate costs
+        entry_cost = amount * entry_price + entry_fee
+
+        # Check if we have enough capital
+        if entry_cost > capital:
+            amount = int((capital - entry_fee) / entry_price)
+            if amount <= 0:
+                continue
+            entry_cost = amount * entry_price + entry_fee
+
+        # Deduct entry cost from capital
+        capital -= entry_cost
+
+        # Create recalculated trade
+        trade = {
+            'symbol': raw_trade.get('symbol', ''),
+            'direction': raw_trade.get('direction', 'LONG'),
+            'entry_date': raw_trade.get('entry_date', ''),
+            'entry_time': raw_trade.get('entry_time', ''),
+            'entry_price': entry_price,
+            'stake': round(stake, 2),
+            'quantity': amount,
+            'entry_fee': entry_fee
+        }
+
+        if exit_price and exit_price > 0:
+            # Closed trade
+            exit_proceeds = amount * exit_price - exit_fee
+
+            if trade['direction'] == 'LONG':
+                pnl = exit_proceeds - (amount * entry_price)
+            else:  # SHORT
+                pnl = (amount * entry_price) - exit_proceeds
+
+            pnl_pct = (pnl / (amount * entry_price)) * 100 if amount * entry_price > 0 else 0
+
+            # Calculate duration
+            try:
+                entry_dt = datetime.strptime(raw_trade.get('entry_date', ''), '%Y-%m-%d')
+                exit_dt = datetime.strptime(raw_trade.get('exit_date', ''), '%Y-%m-%d')
+                duration = (exit_dt - entry_dt).days
+            except:
+                duration = 0
+
+            trade.update({
+                'exit_date': raw_trade.get('exit_date', ''),
+                'exit_time': raw_trade.get('exit_time', ''),
+                'exit_price': exit_price,
+                'exit_fee': exit_fee,
+                'pnl': round(pnl, 2),
+                'pnl_pct': round(pnl_pct, 2),
+                'duration': duration
+            })
+
+            # Add proceeds back to capital
+            capital += exit_proceeds
+            closed_trades.append(trade)
+        else:
+            # Open position
+            trade['current_price'] = raw_trade.get('current_price', entry_price)
+            trade['market_value'] = amount * trade['current_price']
+
+            if trade['direction'] == 'LONG':
+                trade['unrealized_pnl'] = round(amount * (trade['current_price'] - entry_price), 2)
+            else:
+                trade['unrealized_pnl'] = round(amount * (entry_price - trade['current_price']), 2)
+
+            trade['pnl_pct'] = round((trade['unrealized_pnl'] / (amount * entry_price)) * 100, 2) if amount * entry_price > 0 else 0
+            open_positions.append(trade)
+
+    return closed_trades, open_positions, capital
+
+
+def check_max_hold_bars(positions: List[Dict], max_hold_bars: int, current_date: str) -> List[str]:
+    """
+    Check which positions have exceeded max hold bars and should be closed.
+
+    Returns list of symbols to close.
+    """
+    symbols_to_close = []
+
+    try:
+        current_dt = datetime.strptime(current_date, '%Y-%m-%d')
+    except:
+        return symbols_to_close
+
+    for pos in positions:
+        entry_date = pos.get('entry_date', '')
+        try:
+            if '-' in entry_date:
+                entry_dt = datetime.strptime(entry_date, '%Y-%m-%d')
+            elif len(entry_date) == 8:
+                entry_dt = datetime.strptime(entry_date, '%Y%m%d')
+            else:
+                continue
+
+            days_held = (current_dt - entry_dt).days
+            if days_held >= max_hold_bars:
+                symbols_to_close.append(pos.get('symbol', ''))
+        except:
+            continue
+
+    return symbols_to_close
 
 
 # =============================================================================
@@ -1033,8 +1235,68 @@ def calculate_performance_metrics(equity_curve: List[Dict], closed_trades: List[
 # HTML GENERATION
 # =============================================================================
 def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict],
-                  metrics: Dict, config: Dict, auto_refresh: bool = False) -> str:
-    """Generate HTML dashboard"""
+                  metrics: Dict, config: Dict, auto_refresh: bool = False, lang: str = 'en') -> str:
+    """Generate HTML dashboard in English or German"""
+
+    # Language-specific formatting
+    if lang == 'de':
+        fmt_num = format_number_de
+        fmt_pct = format_pct_de
+        title = "Trade Monitor"
+        lbl_net_liq = "Nettoliquidität (TWS)"
+        lbl_daily = "Täglicher P&L (TWS)"
+        lbl_unrealized = "Unrealisiert (TWS)"
+        lbl_realized = "Realisierter P&L"
+        lbl_total_return = "Gesamtrendite"
+        lbl_positions = "Positionen"
+        lbl_equity = "Kapitalkurve"
+        lbl_daily_pnl = "Täglicher P&L"
+        lbl_open_trades = "Offene Positionen"
+        lbl_closed_trades = "Geschlossene Trades"
+        lbl_sorted_by = "sortiert nach Daily PnL"
+        lbl_no_positions = "Keine offenen Positionen"
+        lbl_no_trades = "Keine geschlossenen Trades"
+        lbl_win_rate = "Gewinnrate"
+        lbl_profit_factor = "Profit Faktor"
+        lbl_sharpe = "Sharpe Ratio"
+        lbl_max_dd = "Max Drawdown"
+        lbl_total_trades = "Trades gesamt"
+        lbl_avg_winner = "Ø Gewinner"
+        lbl_avg_loser = "Ø Verlierer"
+        lbl_expectancy = "Erwartungswert"
+        lbl_initial_cap = "Startkapital"
+        lbl_metrics = "Performance Metriken"
+        lbl_last_update = "Letztes Update"
+        currency = "€"
+    else:
+        fmt_num = format_number_en
+        fmt_pct = format_pct_en
+        title = "Trade Monitor"
+        lbl_net_liq = "Net Liquidity (TWS)"
+        lbl_daily = "Daily PnL (TWS)"
+        lbl_unrealized = "Unrealized (TWS)"
+        lbl_realized = "Realized PnL"
+        lbl_total_return = "Total Return"
+        lbl_positions = "Positions"
+        lbl_equity = "Equity Curve"
+        lbl_daily_pnl = "Daily PnL"
+        lbl_open_trades = "Open Positions"
+        lbl_closed_trades = "Closed Trades"
+        lbl_sorted_by = "sorted by Daily PnL"
+        lbl_no_positions = "No open positions"
+        lbl_no_trades = "No closed trades yet"
+        lbl_win_rate = "Win Rate"
+        lbl_profit_factor = "Profit Factor"
+        lbl_sharpe = "Sharpe Ratio"
+        lbl_max_dd = "Max Drawdown"
+        lbl_total_trades = "Total Trades"
+        lbl_avg_winner = "Avg Winner"
+        lbl_avg_loser = "Avg Loser"
+        lbl_expectancy = "Expectancy"
+        lbl_initial_cap = "Initial Capital"
+        lbl_metrics = "Performance Metrics"
+        lbl_last_update = "Last Update"
+        currency = "$"
 
     # Chart data
     equity_labels = json.dumps([e['date'][-5:] for e in equity_curve[-90:]])
@@ -1069,18 +1331,24 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
         realized_class = "positive" if realized_pnl >= 0 else "negative"
         pnl_class = "positive" if pos.get('pnl_pct', 0) >= 0 else "negative"
 
-        # Show realized only if non-zero
-        realized_str = f"${realized_pnl:+,.0f}" if realized_pnl != 0 else ""
+        # Show realized only if non-zero (use language-specific formatting)
+        realized_str = fmt_num(realized_pnl, 0, currency) if realized_pnl != 0 else ""
 
-        # Entry date/time
+        # Entry date/time (German: DD.MM, English: MM/DD)
         entry_date = pos.get('entry_date', '')
         entry_time = pos.get('entry_time', '')
         if entry_date:
             if len(entry_date) == 8 and entry_date.isdigit():
-                entry_date = f"{entry_date[4:6]}/{entry_date[6:8]}"
+                if lang == 'de':
+                    entry_date = f"{entry_date[6:8]}.{entry_date[4:6]}"
+                else:
+                    entry_date = f"{entry_date[4:6]}/{entry_date[6:8]}"
             elif '-' in entry_date:
                 parts = entry_date.split('-')
-                entry_date = f"{parts[1]}/{parts[2]}" if len(parts) == 3 else entry_date
+                if lang == 'de':
+                    entry_date = f"{parts[2]}.{parts[1]}" if len(parts) == 3 else entry_date
+                else:
+                    entry_date = f"{parts[1]}/{parts[2]}" if len(parts) == 3 else entry_date
         if entry_time and len(entry_time) >= 4:
             entry_datetime = f"{entry_date} {entry_time[:2]}:{entry_time[2:4]}"
         else:
@@ -1088,16 +1356,16 @@ def generate_html(data: Dict, equity_curve: List[Dict], closed_trades: List[Dict
 
         positions_html += f"""
         <tr>
-            <td class="{daily_class}"><strong>${daily_pnl:+,.0f}</strong></td>
+            <td class="{daily_class}"><strong>{fmt_num(daily_pnl, 0, currency)}</strong></td>
             <td><strong>{pos['symbol']}</strong></td>
             <td>{pos['quantity']}</td>
-            <td>${pos.get('market_value', 0):,.0f}</td>
-            <td>${pos['entry_price']:,.2f}</td>
-            <td>${pos['current_price']:,.2f}</td>
+            <td>{fmt_num(pos.get('market_value', 0), 0, currency)}</td>
+            <td>{fmt_num(pos['entry_price'], 2, currency)}</td>
+            <td>{fmt_num(pos['current_price'], 2, currency)}</td>
             <td>{entry_datetime}</td>
-            <td class="{unrealized_class}">${unrealized_pnl:+,.0f}</td>
+            <td class="{unrealized_class}">{fmt_num(unrealized_pnl, 0, currency)}</td>
             <td class="{realized_class}">{realized_str}</td>
-            <td class="{pnl_class}">{pos.get('pnl_pct', 0):+.2f}%</td>
+            <td class="{pnl_class}">{fmt_pct(pos.get('pnl_pct', 0))}</td>
         </tr>
         """
 
@@ -1753,16 +2021,23 @@ def main():
     history['open_positions'] = positions
     save_history(history)
 
-    # Generate HTML (2026 data only)
-    print("\nGenerating dashboard...")
-    html = generate_html(data, equity_curve, closed_trades_2026, metrics, config, auto_refresh)
+    # Generate HTML (2026 data only) - BOTH ENGLISH AND GERMAN
+    print("\nGenerating dashboards...")
 
+    # English dashboard
+    html_en = generate_html(data, equity_curve, closed_trades_2026, metrics, config, auto_refresh, lang='en')
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write(html)
+        f.write(html_en)
+
+    # German dashboard
+    html_de = generate_html(data, equity_curve, closed_trades_2026, metrics, config, auto_refresh, lang='de')
+    with open(OUTPUT_FILE_DE, 'w', encoding='utf-8') as f:
+        f.write(html_de)
 
     # Summary
     print(f"\n{'='*60}")
     print(f"✓ Dashboard saved to: {OUTPUT_FILE}")
+    print(f"✓ Dashboard saved to: {OUTPUT_FILE_DE}")
     print(f"{'='*60}")
     print(f"  Kapital:           ${metrics['current_capital']:,.2f}")
     print(f"  Total Return:      ${metrics['total_return']:+,.2f} ({metrics['total_return_pct']:+.1f}%)")
@@ -1775,11 +2050,12 @@ def main():
         print(f"\n  ⚠ FlexQuery nicht konfiguriert!")
         print(f"    Führe aus: python generate_dashboard.py --setup-flex")
 
-    # Open in browser
+    # Open both in browser
     try:
         import webbrowser
         webbrowser.open('file://' + os.path.realpath(OUTPUT_FILE))
-        print("\n  Opened in browser")
+        webbrowser.open('file://' + os.path.realpath(OUTPUT_FILE_DE))
+        print("\n  Opened both dashboards in browser")
     except:
         pass
 
